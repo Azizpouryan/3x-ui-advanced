@@ -162,6 +162,25 @@ jobs:
             git push origin HEAD:rebuild/v3.8.5-rbac
           fi
 
+      - name: Publish tested release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v3.8.5-advanced.1
+          target_commitish: rebuild/v3.8.5-rbac
+          name: 3x-ui Advanced v3.8.5-advanced.1
+          body: |
+            This release is based on the official MHSanaei/3x-ui v3.8.5 source and adds multi-admin RBAC, scoped reseller access, custom roles, per-reseller quotas, and an admin audit log.
+
+            The binary is published only after the frontend build, installer syntax checks, Go tests, and Linux build pass.
+          files: |
+            x-ui-linux-amd64.tar.gz
+            x-ui-linux-amd64.tar.gz.sha256
+            PORTING_REPORT_v3.8.5.md
+          make_latest: true
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Upload migration and build artifacts
         if: always()
         uses: actions/upload-artifact@v4
