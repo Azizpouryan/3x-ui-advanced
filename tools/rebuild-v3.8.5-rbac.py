@@ -1,0 +1,376 @@
+#!/usr/bin/env python3
+"""Rebuild from official v3.8.5, then port the admin/RBAC overlay explicitly."""
+from __future__ import annotations
+import json, shutil, subprocess, tarfile, tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE_REF = "refs/remotes/origin/main"
+TARGET_REF = "refs/tags/port-target-v3.8.5"
+REPO = "Azizpouryan/3x-ui-advanced"
+RELEASE_TAG = "v3.8.5-advanced.1"
+RBAC_FILES = [
+    "internal/web/controller/access.go", "internal/web/controller/admin.go",
+    "internal/web/controller/role.go", "internal/web/controller/reseller.go",
+    "internal/web/service/admin.go", "internal/web/service/role.go",
+    "internal/web/service/role_test.go", "frontend/src/lib/permissions.ts",
+    "frontend/src/pages/admins/AdminsPage.tsx", "frontend/src/pages/admins/AdminsPage.css",
+    "frontend/src/pages/admins/RolesCard.tsx", "frontend/src/pages/reseller/ResellerDashboardPage.tsx",
+    "frontend/src/pages/reseller/ResellerDashboardPage.css", "frontend/src/test/permissions.test.ts",
+]
+KEEP_FILES = ["tools/port-v3.8.5.py", "tools/rebuild-v3.8.5-rbac.py"]
+MIDDLEWARE = r'''package middleware
+
+import (
+    "net/http"
+    "strings"
+    "github.com/gin-gonic/gin"
+    "github.com/mhsanaei/3x-ui/v3/internal/database/model"
+    "github.com/mhsanaei/3x-ui/v3/internal/web/session"
+)
+
+// RBACMiddleware is the server-side permission gate.
+func RBACMiddleware() gin.HandlerFunc {
+    return func(c *gin.Context) {
+        fullPath := c.FullPath()
+        marker := strings.Index(fullPath, "/panel/api")
+        if marker < 0 { c.Next(); return }
+        apiPath := fullPath[marker:]
+        if strings.HasSuffix(apiPath, "/openapi.json") { c.Next(); return }
+        u := session.GetLoginUser(c)
+        if u == nil || u.Role == "" || u.Role == model.RoleSuperAdmin { c.Next(); return }
+        perm := requiredPermission(c.Request.Method, apiPath)
+        if perm != "" && !session.Can(c, perm) {
+            c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "msg": "forbidden: your admin role cannot perform this action"})
+            return
+        }
+        if session.IsScoped(c) && scopedRouteDenied(c.Request.Method, apiPath) {
+            c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"success": false, "msg": "forbidden: this action is not available to scoped admins"})
+            return
+        }
+        c.Next()
+    }
+}
+
+func requiredPermission(method, path string) string {
+    switch {
+    case strings.HasPrefix(path, "/panel/api/admin"), strings.HasPrefix(path, "/panel/api/roles"), strings.HasPrefix(path, "/panel/api/shop"):
+        return model.PermAdminsManage
+    case strings.HasPrefix(path, "/panel/api/setting"):
+        return model.PermSettingsManage
+    case strings.HasPrefix(path, "/panel/api/xray"):
+        return model.PermXrayManage
+    case strings.HasPrefix(path, "/panel/api/server"):
+        if strings.Contains(strings.ToLower(path), "xray") || strings.Contains(strings.ToLower(path), "geofile") || strings.Contains(strings.ToLower(path), "xrayservice") { return model.PermXrayManage }
+        return model.PermSettingsManage
+    case strings.HasPrefix(path, "/panel/api/nodes"): return model.PermNodesManage
+    case strings.HasPrefix(path, "/panel/api/hosts"): return model.PermHostsManage
+    case strings.HasPrefix(path, "/panel/api/plans"): return model.PermPlansManage
+    case strings.Contains(path, "/groups"): return model.PermGroupsManage
+    case strings.HasPrefix(path, "/panel/api/inbounds"):
+        if isReadRoute(method, path) { return model.PermInboundsView }; return model.PermInboundsManage
+    case strings.HasPrefix(path, "/panel/api/clients"):
+        if isReadRoute(method, path) { return model.PermClientsView }; return model.PermClientsManage
+    case strings.HasPrefix(path, "/panel/api/reseller"): return ""
+    default:
+        if method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions { return model.PermSettingsManage }
+        return ""
+    }
+}
+
+func isReadRoute(method, path string) bool {
+    if method == http.MethodGet || method == http.MethodHead || method == http.MethodOptions { return true }
+    for _, ending := range []string{
+        "/onlines", "/onlinesByGuid", "/clientIpsByGuid", "/activeInbounds",
+        "/lastOnline", "/ips/:email", "/hwids/:email", "/getConfigJson",
+        "/getStatus", "/getLogs", "/xraylogs/:count", "/clientIps",
+        "/logs/:count", "/getDb", "/getMigration", "/traffic/:email",
+        "/subLinks/:subId", "/links/:email", "/happLink/:id",
+    } { if strings.HasSuffix(path, ending) { return true } }
+    return false
+}
+
+func scopedRouteDenied(method, path string) bool {
+    for _, prefix := range []string{
+        "/panel/api/admin", "/panel/api/roles", "/panel/api/server",
+        "/panel/api/setting", "/panel/api/xray", "/panel/api/nodes",
+        "/panel/api/hosts", "/panel/api/plans", "/panel/api/shop",
+    } { if strings.HasPrefix(path, prefix) { return true } }
+    if strings.HasPrefix(path, "/panel/api/inbounds") { return !isReadRoute(method, path) }
+    if strings.HasPrefix(path, "/panel/api/clients") {
+        for _, ending := range []string{
+            "/import", "/export", "/delOrphans", "/resetAllTraffics", "/delDepleted",
+            "/bulkAdjust", "/bulkEnable", "/bulkDisable", "/bulkDel", "/bulkCreate",
+            "/bulkAttach", "/bulkDetach", "/bulkResetTraffic",
+        } { if strings.HasSuffix(path, ending) { return true } }
+    }
+    return false
+}
+'''
+
+def run(args, stdout=None):
+    subprocess.run(args, cwd=ROOT, stdout=stdout, check=True)
+
+def archive(ref, dest):
+    tarpath = dest.parent / (dest.name + ".tar")
+    with tarpath.open("wb") as handle: run(["git", "archive", ref], stdout=handle)
+    dest.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(tarpath, "r:") as tf: tf.extractall(dest, filter="data")
+    tarpath.unlink(missing_ok=True)
+
+def copy_item(src, rel, destroot):
+    if not src.exists() and not src.is_symlink(): return False
+    dst = destroot / rel
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists() or dst.is_symlink():
+        if dst.is_dir() and not dst.is_symlink(): shutil.rmtree(dst)
+        else: dst.unlink()
+    if src.is_symlink(): dst.symlink_to(src.readlink())
+    elif src.is_dir(): shutil.copytree(src, dst, symlinks=True)
+    else: shutil.copy2(src, dst)
+    return True
+
+def replace_once(text, old, new, label):
+    if old not in text: raise RuntimeError("Cannot patch " + label)
+    return text.replace(old, new, 1)
+
+def block(text, start, end):
+    a = text.find(start); b = text.find(end, a + len(start))
+    if a < 0 or b < 0: raise RuntimeError("Cannot extract source block: " + start)
+    return text[a:b].rstrip() + "\n\n"
+
+def patch_model(src, dst):
+    role = block(src, "// Role constants for the role-based access control (RBAC) layer", "// User represents a user account in the 3x-ui panel.")
+    extra = block(src, "// AdminAuditLog records mutations performed by admin users", "// Telegram shop: wallet-funded, pay-as-you-go config sales.")
+    methods = block(src, "// PermissionList splits the stored CSV into its permission keys", "// Inbound represents an Xray inbound configuration")
+    dst = replace_once(dst, "// User represents a user account in the 3x-ui panel.\n", role + "// User represents a user account in the 3x-ui-ui panel.\n".replace("3x-ui-ui", "3x-ui"), "role constants")
+    ss = src.find("type User struct {"); se = src.find("\n}", ss); user = src[ss:se]
+    fs = user.find("\n\t// Role is one of RoleSuperAdmin")
+    if fs < 0: raise RuntimeError("RBAC User fields are missing")
+    fields = user[fs:]
+    ds = dst.find("type User struct {"); de = dst.find("\n}", ds)
+    if ds < 0 or de < 0: raise RuntimeError("official User struct is missing")
+    dst = dst[:de] + fields + dst[de:]
+    dst = replace_once(dst, "// Inbound represents an Xray inbound configuration", extra + methods + "// Inbound represents an Xray inbound configuration", "admin model definitions")
+    if '"strconv"' not in dst[:dst.find(")\n\n")]:
+        dst = replace_once(dst, '"strings"', '"strconv"\n\t"strings"', "strconv import")
+    return dst
+
+def patch_db(dst):
+    return replace_once(dst, "\t\t&model.User{},\n",
+        "\t\t&model.User{},\n\t\t&model.AdminRole{},\n\t\t&model.AdminAuditLog{},\n\t\t&model.ResellerQuotaDisabledInbound{},\n\t\t&model.Plan{},\n", "RBAC AutoMigrate entries")
+
+def patch_api(dst):
+    marker = '\tapi.GET("/openapi.json", ServeOpenAPISpec)\n'
+    addition = marker + '''
+    // Multi-admin RBAC endpoints.
+    admins := api.Group("/admin")
+    admins.Use(requireSuperAdmin())
+    NewAdminController(admins)
+
+    roles := api.Group("/roles")
+    roles.Use(requirePermission(model.PermAdminsManage))
+    NewRoleController(roles)
+
+    reseller := api.Group("/reseller")
+    NewResellerController(reseller)
+'''
+    dst = replace_once(dst, marker, addition, "admin endpoints")
+    return replace_once(dst, "\tapi.Use(a.checkAPIAuth)\n",
+        "\tapi.Use(a.checkAPIAuth)\n\tapi.Use(middleware.RBACMiddleware())\n", "global RBAC middleware")
+
+def patch_web(dst):
+    if '"github.com/mhsanaei/3x-ui/v3/internal/web/session"' not in dst:
+        dst = replace_once(dst, '"github.com/mhsanaei/3x-ui/v3/internal/web/service"\n',
+            '"github.com/mhsanaei/3x-ui/v3/internal/web/service"\n\t"github.com/mhsanaei/3x-ui/v3/internal/web/session"\n', "session import")
+    return replace_once(dst, "func (s *Server) initRouter() (*gin.Engine, error) {\n",
+        "func (s *Server) initRouter() (*gin.Engine, error) {\n\tsession.SetPermissionResolver(service.PermissionsForRole)\n\tservice.ReloadRoleCache()\n", "permission resolver initialization")
+
+def patch_inbounds(dst):
+    dst = replace_once(dst, 'g.GET("/get/:id", a.getInbound)', 'g.GET("/get/:id", scopeInboundParam, a.getInbound)', "inbound detail scope")
+    dst = replace_once(dst, 'g.GET("/:id/fallbacks", a.getFallbacks)', 'g.GET("/:id/fallbacks", scopeInboundParam, a.getFallbacks)', "fallback read scope")
+    dst = replace_once(dst, 'g.POST("/:id/fallbacks", a.setFallbacks)', 'g.POST("/:id/fallbacks", scopeInboundParam, a.setFallbacks)', "fallback write scope")
+    dst = replace_once(dst, "jsonObj(c, inbounds, nil)", "jsonObj(c, filterInboundsForRole(c, inbounds), nil)", "inbound list filter")
+    dst = replace_once(dst, "jsonObj(c, inbounds, nil)", "jsonObj(c, filterInboundsForRole(c, inbounds), nil)", "slim inbound list filter")
+    return replace_once(dst, "jsonObj(c, options, nil)", "jsonObj(c, filterInboundOptionsForRole(c, options), nil)", "inbound option filter")
+
+def patch_clients(dst):
+    marker = "func (a *ClientController) initRouter(g *gin.RouterGroup) {\n"
+    closures = marker + '''    scopeEmail := func(c *gin.Context) {
+        if guardClientEmailScope(c, &a.clientService, c.Param("email")) { c.Next() }
+    }
+    scopeSubID := func(c *gin.Context) {
+        if guardClientSubIdScope(c, &a.clientService, c.Param("subId")) { c.Next() }
+    }
+'''
+    dst = replace_once(dst, marker, closures, "client scope closures")
+    pairs = [
+        ('g.GET("/get/:email", a.get)', 'g.GET("/get/:email", scopeEmail, a.get)'),
+        ('g.GET("/traffic/:email", a.getTrafficByEmail)', 'g.GET("/traffic/:email", scopeEmail, a.getTrafficByEmail)'),
+        ('g.GET("/subLinks/:subId", a.getSubLinks)', 'g.GET("/subLinks/:subId", scopeSubID, a.getSubLinks)'),
+        ('g.GET("/links/:email", a.getClientLinks)', 'g.GET("/links/:email", scopeEmail, a.getClientLinks)'),
+        ('g.POST("/update/:email", a.update)', 'g.POST("/update/:email", scopeEmail, a.update)'),
+        ('g.POST("/del/:email", a.delete)', 'g.POST("/del/:email", scopeEmail, a.delete)'),
+        ('g.POST("/:email/attach", a.attach)', 'g.POST("/:email/attach", scopeEmail, a.attach)'),
+        ('g.POST("/:email/detach", a.detach)', 'g.POST("/:email/detach", scopeEmail, a.detach)'),
+        ('g.POST("/:email/externalLinks", a.setExternalLinks)', 'g.POST("/:email/externalLinks", scopeEmail, a.setExternalLinks)'),
+        ('g.POST("/resetTraffic/:email", a.resetTrafficByEmail)', 'g.POST("/resetTraffic/:email", scopeEmail, a.resetTrafficByEmail)'),
+        ('g.POST("/updateTraffic/:email", a.updateTrafficByEmail)', 'g.POST("/updateTraffic/:email", scopeEmail, a.updateTrafficByEmail)'),
+        ('g.POST("/ips/:email", a.getIps)', 'g.POST("/ips/:email", scopeEmail, a.getIps)'),
+        ('g.POST("/clearIps/:email", a.clearIps)', 'g.POST("/clearIps/:email", scopeEmail, a.clearIps)'),
+        ('g.POST("/hwids/:email", a.getHwids)', 'g.POST("/hwids/:email", scopeEmail, a.getHwids)'),
+        ('g.DELETE("/hwids/:email", a.clearHwids)', 'g.DELETE("/hwids/:email", scopeEmail, a.clearHwids)'),
+        ('g.DELETE("/hwids/:email/:id", a.deleteHwid)', 'g.DELETE("/hwids/:email/:id", scopeEmail, a.deleteHwid)'),
+    ]
+    for old, new in pairs: dst = replace_once(dst, old, new, old)
+    return replace_once(dst, "jsonObj(c, rows, nil)", "jsonObj(c, filterClientsForRole(c, rows), nil)", "client list filter")
+
+def rewrite_installer(root):
+    count = 0
+    for rel in ("install.sh", "x-ui.sh"):
+        p = root / rel
+        if not p.is_file(): continue
+        old = p.read_text(encoding="utf-8")
+        new = old.replace("MHSanaei/3x-ui", REPO).replace("admin6501/3x-ui", REPO)
+        new = new.replace("raw.githubusercontent.com/" + REPO + "/main/", "raw.githubusercontent.com/" + REPO + "/rebuild/v3.8.5-rbac/")
+        marker = "install_x-ui() {"
+        if rel == "install.sh" and marker in new and RELEASE_TAG not in new:
+            gate = marker + '''
+    if [ "$#" -gt 0 ]; then
+        requested_release="$1"
+    else
+        requested_release="$(curl -fsSL --retry 3 "https://api.github.com/repos/''' + REPO + '''/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\\1/')"
+    fi
+    if [ "$requested_release" != "''' + RELEASE_TAG + '''" ]; then
+        echo "RBAC v3.8.5 build is not validated. Refusing to install $requested_release." >&2
+        exit 1
+    fi
+'''
+            new = new.replace(marker, gate, 1)
+        if new != old:
+            p.write_text(new, encoding="utf-8", newline="")
+            count += 1
+    return count
+
+def merge_locales(srcroot, outroot):
+    srcbase = srcroot / "frontend/src/i18n"; dstbase = outroot / "frontend/src/i18n"
+    if not srcbase.exists() or not dstbase.exists(): return 0
+    count = 0
+    def merge(base, extra):
+        if isinstance(base, dict) and isinstance(extra, dict):
+            for k, v in extra.items():
+                if k not in base: base[k] = v
+                elif isinstance(base[k], dict) and isinstance(v, dict): merge(base[k], v)
+        return base
+    for src in srcbase.rglob("*.json"):
+        dst = outroot / src.relative_to(srcroot)
+        try:
+            extra = json.loads(src.read_text(encoding="utf-8"))
+            if not dst.exists():
+                copy_item(src, src.relative_to(srcroot).as_posix(), outroot); count += 1; continue
+            old = dst.read_text(encoding="utf-8")
+            rendered = json.dumps(merge(json.loads(old), extra), ensure_ascii=False, indent=2) + "\n"
+            if rendered != old: dst.write_text(rendered, encoding="utf-8", newline=""); count += 1
+        except (ValueError, UnicodeDecodeError): pass
+    return count
+
+def patch_frontend(root):
+    count = 0
+    rp = root / "frontend/src/routes.tsx"
+    routes = rp.read_text(encoding="utf-8")
+    if "const AdminsPage =" not in routes:
+        routes = routes.replace("import { createBrowserRouter, type RouteObject } from 'react-router';",
+            "import { createBrowserRouter, Navigate, type RouteObject } from 'react-router';")
+        routes = replace_once(routes, "const ApiDocsPage = lazy(() => import('@/pages/api-docs/ApiDocsPage'));\n",
+            "const ApiDocsPage = lazy(() => import('@/pages/api-docs/ApiDocsPage'));\n"
+            "const AdminsPage = lazy(() => import('@/pages/admins/AdminsPage'));\n"
+            "const ResellerDashboardPage = lazy(() => import('@/pages/reseller/ResellerDashboardPage'));\n", "admin frontend imports")
+        routes = replace_once(routes, "const routes: RouteObject[] = [",
+            '''function AdminsRoute() {
+  const role = (typeof window !== 'undefined' && window.X_UI_ROLE) || 'super_admin';
+  if (role !== 'super_admin') return <Navigate to="/" replace />;
+  return withSuspense(<AdminsPage />);
+}
+
+const routes: RouteObject[] = [''', "admin UI guard")
+        routes = replace_once(routes, "{ path: 'api-docs', element: withSuspense(<ApiDocsPage />) },",
+            "{ path: 'api-docs', element: withSuspense(<ApiDocsPage />) },\n"
+            "      { path: 'admins', element: <AdminsRoute /> },\n"
+            "      { path: 'usage', element: withSuspense(<ResellerDashboardPage />) },", "admin routes")
+        rp.write_text(routes, encoding="utf-8", newline=""); count += 1
+    sp = root / "frontend/src/layouts/AppSidebar.tsx"
+    sidebar = sp.read_text(encoding="utf-8")
+    if "| 'admins'" not in sidebar:
+        sidebar = replace_once(sidebar, "  | 'routing';", "  | 'routing'\n  | 'admins'\n  | 'usage';", "sidebar icon type")
+        sidebar = replace_once(sidebar, "  routing: SwapOutlined,\n};",
+            "  routing: SwapOutlined,\n  admins: SafetyOutlined,\n  usage: TeamOutlined,\n};", "sidebar icon map")
+        sidebar = replace_once(sidebar, "      { key: '/api-docs', icon: 'apidocs', title: t('menu.apiDocs') },",
+            "      { key: '/api-docs', icon: 'apidocs', title: t('menu.apiDocs') },\n"
+            "      { key: '/admins', icon: 'admins', title: t('menu.admins') },\n"
+            "      { key: '/usage', icon: 'usage', title: t('menu.usage') },", "sidebar items")
+        sp.write_text(sidebar, encoding="utf-8", newline=""); count += 1
+    return count
+
+def count_files(root):
+    return sum(1 for p in root.rglob("*") if p.is_file() or p.is_symlink())
+
+def main():
+    for ref in (SOURCE_REF, TARGET_REF): run(["git", "rev-parse", "--verify", ref])
+    temp = Path(tempfile.mkdtemp(prefix="v385-rbac-"))
+    try:
+        source, target, current, output = (temp / n for n in ("source", "target", "current", "output"))
+        archive(SOURCE_REF, source); archive(TARGET_REF, target); archive("HEAD", current)
+        shutil.copytree(target, output, symlinks=True)
+        copy_item(current / ".github", ".github", output)
+        for rel in KEEP_FILES: copy_item(current / rel, rel, output)
+        copied = []
+        for rel in RBAC_FILES:
+            if copy_item(source / rel, rel, output): copied.append(rel)
+        for rel in ("internal/web/session/session.go", "internal/web/controller/base.go"):
+            copy_item(source / rel, rel, output); copied.append(rel)
+
+        mp = output / "internal/database/model/model.go"
+        mp.write_text(patch_model((source / "internal/database/model/model.go").read_text(encoding="utf-8"),
+                                  mp.read_text(encoding="utf-8")), encoding="utf-8", newline="")
+        dp = output / "internal/database/db.go"
+        dp.write_text(patch_db(dp.read_text(encoding="utf-8")), encoding="utf-8", newline="")
+        ap = output / "internal/web/controller/api.go"
+        ap.write_text(patch_api(ap.read_text(encoding="utf-8")), encoding="utf-8", newline="")
+        wp = output / "internal/web/web.go"
+        wp.write_text(patch_web(wp.read_text(encoding="utf-8")), encoding="utf-8", newline="")
+        ip = output / "internal/web/controller/inbound.go"
+        ip.write_text(patch_inbounds(ip.read_text(encoding="utf-8")), encoding="utf-8", newline="")
+        cp = output / "internal/web/controller/client.go"
+        cp.write_text(patch_clients(cp.read_text(encoding="utf-8")), encoding="utf-8", newline="")
+        rb = output / "internal/web/middleware/rbac.go"
+        rb.parent.mkdir(parents=True, exist_ok=True); rb.write_text(MIDDLEWARE, encoding="utf-8", newline="")
+        locale_count = merge_locales(source, output)
+        frontend_count = patch_frontend(output)
+        url_count = rewrite_installer(output)
+
+        readme = output / "README.md"
+        if readme.exists():
+            text = readme.read_text(encoding="utf-8").replace("# 3X-UI", "# 3X-UI Advanced — official v3.8.5 with multi-admin RBAC", 1)
+            text += "\n\n## Multi-admin RBAC overlay\n\nThis repository starts from official MHSanaei/3x-ui v3.8.5 and ports multi-admin role management, scoped reseller access, custom roles, and the Admins page. Release is gated on passing CI.\n"
+            readme.write_text(text, encoding="utf-8", newline="")
+        status = "# v3.8.5 RBAC rebuild status\n\nRebuilt from official MHSanaei/3x-ui tag v3.8.5. This is an unvalidated candidate. CI must pass frontend build, shell checks, Go tests, and Linux binary build before release. Do not install on a production server until release v3.8.5-advanced.1 exists.\n"
+        (output / "MIGRATION_STATUS_v3.8.5.md").write_text(status, encoding="utf-8", newline="")
+        details = ["# RBAC port report", "", "- Official base: MHSanaei/3x-ui tag v3.8.5.", "- Admin source: original main branch of Azizpouryan/3x-ui-advanced.", "- Official code is the source of truth; only the RBAC overlay is carried across.", "", "## Files ported", ""] + ["- " + p for p in copied] + ["", "## Port steps", "", "- Original source files: " + str(count_files(source)), "- Locale JSON files merged: " + str(locale_count), "- Frontend integration patches: " + str(frontend_count), "- Installer/updater files rewritten: " + str(url_count), "", "This report does not mean tests passed.", ""]
+        (output / "PORTING_REPORT_v3.8.5.md").write_text("\n".join(details), encoding="utf-8", newline="")
+
+        for child in ROOT.iterdir():
+            if child.name == ".git": continue
+            if child.is_symlink() or child.is_file(): child.unlink()
+            elif child.is_dir(): shutil.rmtree(child)
+        for child in output.iterdir():
+            dst = ROOT / child.name
+            if child.is_symlink(): dst.symlink_to(child.readlink())
+            elif child.is_dir(): shutil.copytree(child, dst, symlinks=True)
+            else: shutil.copy2(child, dst)
+        print("Rebuilt official v3.8.5 tree; RBAC files ported: " + str(len(copied)))
+        print("Locales merged: " + str(locale_count) + "; frontend patches: " + str(frontend_count))
+    finally:
+        shutil.rmtree(temp, ignore_errors=True)
+
+if __name__ == "__main__":
+    main()
