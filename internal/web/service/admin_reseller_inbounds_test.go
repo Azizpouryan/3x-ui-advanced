@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
@@ -192,7 +193,7 @@ func intsToCSV(ids ...int) string {
 		if i > 0 {
 			out += ","
 		}
-		out += itoa(id)
+		out += strconv.Itoa(id)
 	}
 	return out
 }
