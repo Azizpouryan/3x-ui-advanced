@@ -119,6 +119,8 @@ func scopedRouteDenied(method, path string) bool {
             "/panel/api/clients/update/:email": {"POST": true},
             "/panel/api/clients/del/:email": {"POST": true},
             "/panel/api/clients/:email/externalLinks": {"POST": true},
+            "/panel/api/clients/:email/attach": {"POST": true},
+            "/panel/api/clients/:email/detach": {"POST": true},
             "/panel/api/clients/resetTraffic/:email": {"POST": true},
             "/panel/api/clients/updateTraffic/:email": {"POST": true},
             "/panel/api/clients/ips/:email": {"POST": true},
@@ -592,6 +594,18 @@ def patch_clients(source, dst):
         "scope-aware paginated client listing",
     )
 
+    dst = replace_once(
+        dst,
+        "\tneedRestart, err := a.clientService.AttachByEmail(&a.inboundService, email, body.InboundIds)",
+        "\tif !guardInboundIdsScope(c, body.InboundIds) {\n\t\treturn\n\t}\n\tneedRestart, err := a.clientService.AttachByEmail(&a.inboundService, email, body.InboundIds)",
+        "attachment inbound scope guard",
+    )
+    dst = replace_once(
+        dst,
+        "\tneedRestart, err := a.clientService.DetachByEmail(&a.inboundService, email, body.InboundIds)",
+        "\tif !guardInboundIdsScope(c, body.InboundIds) {\n\t\treturn\n\t}\n\tneedRestart, err := a.clientService.DetachByEmail(&a.inboundService, email, body.InboundIds)",
+        "detachment inbound scope guard",
+    )
     dst = replace_once(
         dst,
         "\tneedRestart, err := a.clientService.Create(&a.inboundService, &payload)",
