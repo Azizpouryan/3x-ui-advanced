@@ -29,7 +29,8 @@
     "react-router": "^8.3.1",
     "recharts": "^3.9.0",
     "swagger-ui-react": "^5.32.15",
-    "zod": "^4.6.5"
+    "zod": "^4.6.5",
+    "uplot": "^1.6.32"
   },
   "description": "3x-ui panel frontend (React 19 + Ant Design 6 + Vite 8).",
   "devDependencies": {
@@ -45,9 +46,7 @@
     "@vitejs/plugin-react": "^6.1.1",
     "@vitest/browser-playwright": "5.0.0",
     "@vitest/coverage-v8": "^5.0.0",
-    "eslint": "^10.5.0",
-    "globals": "^17.7.0",
-    "jsdom": "^29.1.1",
+    "jsdom": "^30.0.1",
     "lint-staged": "^17.5.1",
     "oxfmt": "0.68.0",
     "oxlint": "1.83.0",
@@ -55,9 +54,10 @@
     "playwright": "^1.63.0",
     "storybook": "^10.6.0",
     "typescript": "7.0.2",
-    "typescript-eslint": "^8.62.0",
     "vite": "8.3.0",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.0",
+    "husky": "^9.1.7",
+    "msw": "^2.15.0"
   },
   "engines": {
     "node": ">=22.0.0",
