@@ -6,13 +6,11 @@ on:
     branches:
       - rebuild/v3.8.5-rbac
     paths:
+      # Only pipeline-source changes start a new run. The workflow itself
+      # commits the generated tree and lockfiles; those commits must not cancel
+      # the job that is testing them.
       - .github/workflows/port-v3.8.5.yml
       - tools/rebuild-v3.8.5-rbac.py
-      - frontend/src/pages/api-docs/endpoints.ts
-      - frontend/src/**
-      - internal/**
-      - go.mod
-      - go.sum
 
 permissions:
   contents: write
