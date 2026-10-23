@@ -66,6 +66,7 @@ func requiredPermission(method, path string) string {
         return model.PermSettingsManage
     case strings.HasPrefix(path, "/panel/api/nodes"): return model.PermNodesManage
     case strings.HasPrefix(path, "/panel/api/hosts"): return model.PermHostsManage
+    case strings.HasPrefix(path, "/panel/api/sub-balancers"): return model.PermXrayManage
     case strings.HasPrefix(path, "/panel/api/plans"): return model.PermPlansManage
     case strings.Contains(path, "/groups"): return model.PermGroupsManage
     case strings.HasPrefix(path, "/panel/api/inbounds"):
@@ -165,6 +166,31 @@ def block(text, start, end):
     a = text.find(start); b = text.find(end, a + len(start))
     if a < 0 or b < 0: raise RuntimeError("Cannot extract source block: " + start)
     return text[a:b].rstrip() + "\n\n"
+
+def patch_role_tests(dst):
+    if '"strconv"' not in dst[:dst.find(")\n\n")]:
+        dst = replace_once(dst, '\t"testing"\n', '\t"strconv"\n\t"testing"\n', "role-test strconv import")
+    return dst.replace("itoa(role.Id)", "strconv.Itoa(role.Id)")
+
+
+def patch_migration_models(dst):
+    start = dst.find("func migrationModels() []any {")
+    end = dst.find("\n}", start)
+    if start < 0 or end < 0:
+        raise RuntimeError("Official migrationModels registry not found")
+    region = dst[start:end]
+    region = replace_once(
+        region,
+        "\t\t&model.User{},\n",
+        "\t\t&model.User{},\n"
+        "\t\t&model.AdminAuditLog{},\n"
+        "\t\t&model.AdminRole{},\n"
+        "\t\t&model.Plan{},\n"
+        "\t\t&model.ResellerQuotaDisabledInbound{},\n",
+        "RBAC models in cross-database migration registry",
+    )
+    return dst[:start] + region + dst[end:]
+
 
 def patch_model(src, dst):
     role = block(src, "// Role constants for the role-based access control (RBAC) layer", "// User represents a user account in the 3x-ui panel.")
@@ -831,6 +857,9 @@ def main():
         for rel in RBAC_FILES:
             if copy_item(source / rel, rel, output): copied.append(rel)
 
+        role_test_path = output / "internal/web/service/role_test.go"
+        role_test_path.write_text(patch_role_tests(role_test_path.read_text(encoding="utf-8")), encoding="utf-8", newline="")
+
         sessp = output / "internal/web/session/session.go"
         sessp.write_text(patch_session((source / "internal/web/session/session.go").read_text(encoding="utf-8"),
                                        sessp.read_text(encoding="utf-8")), encoding="utf-8", newline="")
@@ -849,6 +878,8 @@ def main():
                                   mp.read_text(encoding="utf-8")), encoding="utf-8", newline="")
         dp = output / "internal/database/db.go"
         dp.write_text(patch_db(dp.read_text(encoding="utf-8")), encoding="utf-8", newline="")
+        mdp = output / "internal/database/migrate_data.go"
+        mdp.write_text(patch_migration_models(mdp.read_text(encoding="utf-8")), encoding="utf-8", newline="")
         ap = output / "internal/web/controller/api.go"
         ap.write_text(patch_api(ap.read_text(encoding="utf-8")), encoding="utf-8", newline="")
         wp = output / "internal/web/web.go"
