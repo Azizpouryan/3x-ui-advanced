@@ -111,4 +111,3 @@ func scopedRouteDenied(method, path string) bool {
     }
     return false
 }
-}
