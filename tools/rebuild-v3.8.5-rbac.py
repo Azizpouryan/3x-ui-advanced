@@ -133,7 +133,6 @@ func scopedRouteDenied(method, path string) bool {
     }
     return false
 }
-}
 '''
 
 def run(args, stdout=None):
