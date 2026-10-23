@@ -565,30 +565,53 @@ def patch_clients(dst):
 
 def rewrite_installer(root):
     count = 0
-    for rel in ("install.sh", "x-ui.sh"):
+    for rel in ("install.sh", "update.sh", "x-ui.sh"):
         p = root / rel
-        if not p.is_file(): continue
+        if not p.is_file():
+            continue
         old = p.read_text(encoding="utf-8")
         new = old.replace("MHSanaei/3x-ui", REPO).replace("admin6501/3x-ui", REPO)
-        new = new.replace("raw.githubusercontent.com/" + REPO + "/main/", "raw.githubusercontent.com/" + REPO + "/rebuild/v3.8.5-rbac/")
-        marker = "install_x-ui() {"
-        if rel == "install.sh" and marker in new and RELEASE_TAG not in new:
-            gate = marker + '''
-    if [ "$#" -gt 0 ]; then
-        requested_release="$1"
-    else
+        new = new.replace(
+            "raw.githubusercontent.com/" + REPO + "/main/",
+            "raw.githubusercontent.com/" + REPO + "/rebuild/v3.8.5-rbac/",
+        )
+
+        if rel == "install.sh":
+            marker = "install_x-ui() {"
+            if marker in new and RELEASE_TAG not in new:
+                gate = marker + '''
+    requested_release="${1:-}"
+    if [[ -z "$requested_release" ]]; then
         requested_release="$(curl -fsSL --retry 3 "https://api.github.com/repos/''' + REPO + '''/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\\1/')"
     fi
-    if [ "$requested_release" != "''' + RELEASE_TAG + '''" ]; then
-        echo "RBAC v3.8.5 build is not validated. Refusing to install $requested_release." >&2
+    if [[ "$requested_release" != "''' + RELEASE_TAG + '''" ]]; then
+        echo "RBAC v3.8.5 build is not validated. Refusing to install ${requested_release:-unknown}." >&2
         exit 1
     fi
 '''
-            new = new.replace(marker, gate, 1)
+                new = new.replace(marker, gate, 1)
+
+        if rel == "update.sh":
+            marker = "update_x-ui() {"
+            if marker in new and RELEASE_TAG not in new:
+                gate = marker + '''
+    requested_release="${XUI_UPDATE_TAG:-${1:-}}"
+    if [[ -z "$requested_release" ]]; then
+        requested_release="$(curl -fsSL --retry 3 "https://api.github.com/repos/''' + REPO + '''/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\\1/')"
+    fi
+    if [[ "$requested_release" != "''' + RELEASE_TAG + '''" ]]; then
+        echo "RBAC v3.8.5 build is not validated. Refusing to update to ${requested_release:-unknown}." >&2
+        exit 1
+    fi
+    export XUI_UPDATE_TAG="$requested_release"
+'''
+                new = new.replace(marker, gate, 1)
+
         if new != old:
             p.write_text(new, encoding="utf-8", newline="")
             count += 1
     return count
+
 
 def merge_locales(srcroot, outroot):
     srcbase = srcroot / "internal/web/translation"; dstbase = outroot / "internal/web/translation"
