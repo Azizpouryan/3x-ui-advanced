@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: port-v3-8-5-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   port-and-test:
