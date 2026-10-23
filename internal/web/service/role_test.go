@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
@@ -78,7 +79,7 @@ func TestCustomRoleResolvesThroughTheSameGates(t *testing.T) {
 		t.Errorf("permissions = %q, want the known keys only, in canonical order", role.Permissions)
 	}
 
-	key := model.CustomRolePrefix + itoa(role.Id)
+	key := model.CustomRolePrefix + strconv.Itoa(role.Id)
 	perms := PermissionsForRole(key)
 	if !perms[model.PermClientsManage] || perms[model.PermSettingsManage] {
 		t.Errorf("custom role resolved to %v", perms)
@@ -158,7 +159,7 @@ func TestRoleInUseCannotBeDeleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create role: %v", err)
 	}
-	key := model.CustomRolePrefix + itoa(role.Id)
+	key := model.CustomRolePrefix + strconv.Itoa(role.Id)
 
 	actor := &model.User{Id: 1, Username: "admin", Role: model.RoleSuperAdmin}
 	u, err := adminSvc.CreateAdmin(actor, "ops1", "pw", key, "", 0, 0)

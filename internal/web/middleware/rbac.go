@@ -44,6 +44,7 @@ func requiredPermission(method, path string) string {
         return model.PermSettingsManage
     case strings.HasPrefix(path, "/panel/api/nodes"): return model.PermNodesManage
     case strings.HasPrefix(path, "/panel/api/hosts"): return model.PermHostsManage
+    case strings.HasPrefix(path, "/panel/api/sub-balancers"): return model.PermXrayManage
     case strings.HasPrefix(path, "/panel/api/plans"): return model.PermPlansManage
     case strings.Contains(path, "/groups"): return model.PermGroupsManage
     case strings.HasPrefix(path, "/panel/api/inbounds"):
