@@ -602,8 +602,8 @@ def patch_clients(source, dst):
     )
     dst = replace_once(
         dst,
-        "\tneedRestart, err := a.clientService.DetachByEmail(&a.inboundService, email, body.InboundIds)",
-        "\tif !guardInboundIdsScope(c, body.InboundIds) {\n\t\treturn\n\t}\n\tneedRestart, err := a.clientService.DetachByEmail(&a.inboundService, email, body.InboundIds)",
+        "\tneedRestart, err := a.clientService.DetachByEmailMany(&a.inboundService, email, body.InboundIds)",
+        "\tif !guardInboundIdsScope(c, body.InboundIds) {\n\t\treturn\n\t}\n\tneedRestart, err := a.clientService.DetachByEmailMany(&a.inboundService, email, body.InboundIds)",
         "detachment inbound scope guard",
     )
     dst = replace_once(
