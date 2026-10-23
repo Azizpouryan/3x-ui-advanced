@@ -158,7 +158,7 @@ def patch_model(src, dst):
     role = block(src, "// Role constants for the role-based access control (RBAC) layer", "// User represents a user account in the 3x-ui panel.")
     extra = block(src, "// AdminAuditLog records mutations performed by admin users", "// Telegram shop: wallet-funded, pay-as-you-go config sales.")
     methods = block(src, "// PermissionList splits the stored CSV into its permission keys", "// Inbound represents an Xray inbound configuration")
-    dst = replace_once(dst, "// User represents a user account in the 3x-ui panel.\n", role + "// User represents a user account in the 3x-ui-ui panel.\n".replace("3x-ui-ui", "3x-ui"), "role constants")
+    dst = replace_once(dst, "// User represents a user account in the 3x-ui panel.\n", role + "// User represents a user account in the 3x-ui panel.\n", "role constants")
     ss = src.find("type User struct {"); se = src.find("\n}", ss); user = src[ss:se]
     fs = user.find("\n\t// Role is one of RoleSuperAdmin")
     if fs < 0: raise RuntimeError("RBAC User fields are missing")
@@ -296,7 +296,7 @@ def patch_dist(dst):
         '\t"github.com/mhsanaei/3x-ui/v3/internal/web/session"\n\t"github.com/mhsanaei/3x-ui/v3/internal/web/service"\n',
         "RBAC service import in SPA bootstrap",
     )
-    marker = "\\t\\tscript += §;window.X_UI_DB_TYPE=\\"§ + config.GetDBKind() + §\\"§\\n"
+    marker = "\t\tscript += §;window.X_UI_DB_TYPE=\"§ + config.GetDBKind() + §\"§\n"
     marker = marker.replace("§", chr(96))
     addition = marker + """
 \t\trole := model.RoleSuperAdmin
