@@ -1,0 +1,95 @@
+name: Port admin fork to upstream v3.8.5
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: port-v3-8-5-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  port-and-test:
+    # Start this workflow from upgrade/v3.8.5-preserve-admin in the Actions UI.
+    if: startsWith(github.ref, 'refs/heads/upgrade/v3.8.5-preserve-admin')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout the selected upgrade branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      - name: Fetch official baseline and target tags
+        run: |
+          set -euo pipefail
+          git fetch --no-tags https://github.com/MHSanaei/3x-ui.git \
+            refs/tags/v3.6.0:refs/tags/port-base-v3.6.0 \
+            refs/tags/v3.8.5:refs/tags/port-target-v3.8.5
+          git show -s --format='%H %s' refs/tags/port-base-v3.6.0
+          git show -s --format='%H %s' refs/tags/port-target-v3.8.5
+
+      - name: Prepare three-way migration candidate
+        run: python3 tools/port-v3.8.5.py
+
+      - name: Commit candidate for review
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Port admin fork onto upstream v3.8.5"
+            git push origin HEAD:upgrade/v3.8.5-preserve-admin
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Check installer shell syntax
+        run: |
+          set -euo pipefail
+          for file in install.sh update.sh x-ui.sh install_offline.sh; do
+            if [ -f "$file" ]; then bash -n "$file"; fi
+          done
+
+      - name: Run Go tests
+        env:
+          CGO_ENABLED: "1"
+        run: go test ./...
+
+      - name: Build Linux panel binary
+        env:
+          CGO_ENABLED: "1"
+          GOOS: linux
+          GOARCH: amd64
+        run: go build -trimpath -ldflags="-s -w" -o /tmp/x-ui-v3.8.5 .
+
+      - name: Upload migration report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: port-v3.8.5-report
+          path: PORTING_REPORT_v3.8.5.md
+          if-no-files-found: warn
