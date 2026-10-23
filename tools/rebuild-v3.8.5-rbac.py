@@ -101,7 +101,7 @@ func scopedRouteDenied(method, path string) bool {
         // Scoped accounts only see filtered lists and row-level endpoints that
         // receive explicit database-backed scope checks. Everything else denies.
         allowed := map[string]map[string]bool{
-            "/panel/api/clients/list": {"GET": true},
+            "/panel/api/clients/list": {"GET": true},\n            "/panel/api/clients/list/paged": {"GET": true},
             "/panel/api/clients/get/:email": {"GET": true},
             "/panel/api/clients/traffic/:email": {"GET": true},
             "/panel/api/clients/subLinks/:subId": {"GET": true},
@@ -384,6 +384,116 @@ def patch_env(dst):
     )
 
 
+def patch_client_paging(dst):
+    tick = chr(96)
+    params_marker = '\tGroup      string ' + tick + 'form:"group"' + tick + '\n'
+    params_fields = params_marker + '\tScopeEnabled bool ' + tick + 'form:"-" json:"-"' + tick + '\n'
+    params_fields += '\tScopeInboundIDs []int ' + tick + 'form:"-" json:"-"' + tick + '\n'
+    dst = replace_once(dst, params_marker, params_fields, "internal client paging scope params")
+
+    query_marker = '\tnowMs            int64\n'
+    dst = replace_once(
+        dst, query_marker,
+        query_marker + '\tscopeEnabled     bool\n\tscopeInboundIDs  []int\n',
+        "client query scope fields",
+    )
+
+    from_start = dst.find("func (q clientQuery) from() *gorm.DB {")
+    from_end = dst.find("\n}", from_start)
+    if from_start < 0 or from_end < 0:
+        raise RuntimeError("Cannot locate client query FROM builder")
+    from_func = """func (q clientQuery) from() *gorm.DB {
+\ttx := q.db.Table("clients AS c")
+\tfor _, j := range q.joins {
+\t\ttx = tx.Joins(j.sql, j.args...)
+\t}
+\tif q.scopeEnabled {
+\t\tif len(q.scopeInboundIDs) == 0 {
+\t\t\treturn tx.Where("1 = 0")
+\t\t}
+\t\ttx = tx.Where(
+\t\t\t"EXISTS (SELECT 1 FROM client_inbounds scope_ci WHERE scope_ci.client_id = c.id AND scope_ci.inbound_id IN ?)",
+\t\t\tq.scopeInboundIDs,
+\t\t).Where(
+\t\t\t"NOT EXISTS (SELECT 1 FROM client_inbounds scope_ci WHERE scope_ci.client_id = c.id AND scope_ci.inbound_id NOT IN ?)",
+\t\t\tq.scopeInboundIDs,
+\t\t)
+\t}
+\treturn tx
+}"""
+    dst = dst[:from_start] + from_func + dst[from_end + 2:]
+
+    marker = '\tq := newClientQuery(db, time.Now().UnixMilli(), expireDiffMs, trafficDiffBytes)\n'
+    dst = replace_once(
+        dst, marker,
+        marker + '\tq.scopeEnabled = params.ScopeEnabled\n\tq.scopeInboundIDs = params.ScopeInboundIDs\n',
+        "scoped client query setup",
+    )
+
+    total_old = """\tvar total int64
+\tif err := db.Model(&model.ClientRecord{}).Count(&total).Error; err != nil {
+\t\treturn nil, err
+\t}"""
+    total_new = """\tvar total int64
+\tif params.ScopeEnabled {
+\t\tif len(params.ScopeInboundIDs) == 0 {
+\t\t\ttotal = 0
+\t\t} else if err := q.from().Distinct("c.id").Count(&total).Error; err != nil {
+\t\t\treturn nil, err
+\t\t}
+\t} else if err := db.Model(&model.ClientRecord{}).Count(&total).Error; err != nil {
+\t\treturn nil, err
+\t}"""
+    dst = replace_once(dst, total_old, total_new, "scope-safe total count")
+
+    group_old = """\tgroups, err := s.listGroupNames()
+\tif err != nil {
+\t\treturn nil, err
+\t}"""
+    group_new = """\tvar groups []string
+\tif !params.ScopeEnabled {
+\t\tgroups, err = s.listGroupNames()
+\t\tif err != nil {
+\t\t\treturn nil, err
+\t\t}
+\t} else {
+\t\tgroups = []string{}
+\t}"""
+    dst = replace_once(dst, group_old, group_new, "hide global group names from scoped accounts")
+
+    online_start = dst.find("func (q clientQuery) onlineEmails(")
+    online_end = dst.find("\n}", online_start)
+    if online_start < 0 or online_end < 0:
+        raise RuntimeError("Cannot locate online email query")
+    online_func = """func (q clientQuery) onlineEmails(onlines []string) ([]string, int, error) {
+\tmatched := []string{}
+\tcount := 0
+\tfor _, batch := range chunkStrings(onlines, sqlInChunk) {
+\t\tvar page []string
+\t\tvar query *gorm.DB
+\t\tif q.scopeEnabled {
+\t\t\tquery = q.from().
+\t\t\t\tWhere("COALESCE(c.enable, FALSE) = TRUE AND c.email IN ?", batch).
+\t\t\t\tOrder("c.id ASC")
+\t\t} else {
+\t\t\tquery = q.db.Model(&model.ClientRecord{}).
+\t\t\t\tWhere("COALESCE(enable, FALSE) = TRUE AND email IN ?", batch).
+\t\t\t\tOrder("id ASC")
+\t\t}
+\t\tif err := query.Pluck("email", &page).Error; err != nil {
+\t\t\treturn nil, 0, err
+\t\t}
+\t\tcount += len(page)
+\t\tif room := clientSummaryEmailCap - len(matched); room > 0 {
+\t\t\tmatched = append(matched, page[:min(room, len(page))]...)
+\t\t}
+\t}
+\treturn matched, count, nil
+}"""
+    dst = dst[:online_start] + online_func + dst[online_end + 2:]
+    return dst
+
+
 def patch_inbounds(dst):
     dst = replace_once(dst, 'g.GET("/get/:id", a.getInbound)', 'g.GET("/get/:id", scopeInboundParam, a.getInbound)', "inbound detail scope")
     dst = replace_once(dst, 'g.GET("/:id/fallbacks", a.getFallbacks)', 'g.GET("/:id/fallbacks", scopeInboundParam, a.getFallbacks)', "fallback read scope")
@@ -393,7 +503,14 @@ def patch_inbounds(dst):
     return replace_once(dst, "jsonObj(c, options, nil)", "jsonObj(c, filterInboundOptionsForRole(c, options), nil)", "inbound option filter")
 
 def patch_clients(dst):
-    marker = "func (a *ClientController) initRouter(g *gin.RouterGroup) {\n"
+    if '"github.com/mhsanaei/3x-ui/v3/internal/web/session"' not in dst:
+        dst = replace_once(
+            dst,
+            '"github.com/mhsanaei/3x-ui/v3/internal/web/service"\\n',
+            '"github.com/mhsanaei/3x-ui/v3/internal/web/service"\\n\\t"github.com/mhsanaei/3x-ui/v3/internal/web/session"\\n',
+            "client session import",
+        )
+    marker = "func (a *ClientController) initRouter(g *gin.RouterGroup) {\\n"
     closures = marker + '''    scopeEmail := func(c *gin.Context) {
         if guardClientEmailScope(c, &a.clientService, c.Param("email")) { c.Next() }
     }
@@ -421,6 +538,16 @@ def patch_clients(dst):
         ('g.DELETE("/hwids/:email/:id", a.deleteHwid)', 'g.DELETE("/hwids/:email/:id", scopeEmail, a.deleteHwid)'),
     ]
     for old, new in pairs: dst = replace_once(dst, old, new, old)
+    listpaged = """\tif session.IsScoped(c) {
+\t\tparams.ScopeEnabled = true
+\t\tparams.ScopeInboundIDs = service.AllowedInboundIDs(session.GetLoginUser(c))
+\t}
+\tresp, err := a.clientService.ListPaged(&a.inboundService, &a.settingService, params)"""
+    dst = replace_once(dst,
+        "\tresp, err := a.clientService.ListPaged(&a.inboundService, &a.settingService, params)",
+        listpaged,
+        "scope-aware paginated client listing",
+    )
     return replace_once(dst, "jsonObj(c, rows, nil)", "jsonObj(c, filterClientsForRole(c, rows), nil)", "client list filter")
 
 def rewrite_installer(root):
@@ -553,6 +680,8 @@ def main():
         ip.write_text(patch_inbounds(ip.read_text(encoding="utf-8")), encoding="utf-8", newline="")
         cp = output / "internal/web/controller/client.go"
         cp.write_text(patch_clients(cp.read_text(encoding="utf-8")), encoding="utf-8", newline="")
+        pagingp = output / "internal/web/service/client_paging.go"
+        pagingp.write_text(patch_client_paging(pagingp.read_text(encoding="utf-8")), encoding="utf-8", newline="")
         rb = output / "internal/web/middleware/rbac.go"
         rb.parent.mkdir(parents=True, exist_ok=True); rb.write_text(MIDDLEWARE, encoding="utf-8", newline="")
         locale_count = merge_locales(source, output)
