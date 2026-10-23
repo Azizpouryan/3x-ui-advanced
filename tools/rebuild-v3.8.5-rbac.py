@@ -113,6 +113,7 @@ func scopedRouteDenied(method, path string) bool {
         allowed := map[string]map[string]bool{
             "/panel/api/clients/list": {"GET": true},
             "/panel/api/clients/list/paged": {"GET": true},
+            "/panel/api/clients/add": {"POST": true},
             "/panel/api/clients/get/:email": {"GET": true},
             "/panel/api/clients/traffic/:email": {"GET": true},
             "/panel/api/clients/subLinks/:subId": {"GET": true},
@@ -515,22 +516,44 @@ def patch_inbounds(dst):
     dst = replace_once(dst, "jsonObj(c, inbounds, nil)", "jsonObj(c, filterInboundsForRole(c, inbounds), nil)", "slim inbound list filter")
     return replace_once(dst, "jsonObj(c, options, nil)", "jsonObj(c, filterInboundOptionsForRole(c, options), nil)", "inbound option filter")
 
-def patch_clients(dst):
+def patch_clients(source, dst):
     if '"github.com/mhsanaei/3x-ui/v3/internal/web/session"' not in dst:
         dst = replace_once(
             dst,
-            '"github.com/mhsanaei/3x-ui/v3/internal/web/service"\\n',
-            '"github.com/mhsanaei/3x-ui/v3/internal/web/service"\\n\\t"github.com/mhsanaei/3x-ui/v3/internal/web/session"\\n',
+            '"github.com/mhsanaei/3x-ui/v3/internal/web/service"\n',
+            '"github.com/mhsanaei/3x-ui/v3/internal/web/service"\n\t"github.com/mhsanaei/3x-ui/v3/internal/web/session"\n',
             "client session import",
         )
-    marker = "func (a *ClientController) initRouter(g *gin.RouterGroup) {\\n"
-    closures = marker + '''    scopeEmail := func(c *gin.Context) {
-        if guardClientEmailScope(c, &a.clientService, c.Param("email")) { c.Next() }
-    }
-    scopeSubID := func(c *gin.Context) {
-        if guardClientSubIdScope(c, &a.clientService, c.Param("subId")) { c.Next() }
-    }
-'''
+
+    dst = replace_once(
+        dst,
+        "\tsettingService service.SettingService\n\thappGenerator  service.HappLinkGenerator",
+        "\tsettingService service.SettingService\n\tadminService   service.AdminService\n\thappGenerator  service.HappLinkGenerator",
+        "client controller admin service field",
+    )
+
+    quota_helpers = block(source, "const bytesPerGB =", "func parseInboundIdsQuery(raw string) []int {")
+    quota_helpers = replace_once(
+        quota_helpers,
+        "\tif err != nil {\n\t\treturn true\n\t}",
+        "\tif err != nil {\n\t\tjsonMsg(c, I18nWeb(c, \"somethingWentWrong\"), err)\n\t\tc.Abort()\n\t\treturn false\n\t}",
+        "fail-closed reseller quota lookup",
+    )
+    dst = replace_once(
+        dst,
+        "func parseInboundIdsQuery(raw string) []int {",
+        quota_helpers + "func parseInboundIdsQuery(raw string) []int {",
+        "reseller quota enforcement helpers",
+    )
+
+    marker = "func (a *ClientController) initRouter(g *gin.RouterGroup) {\n"
+    closures = marker + """\tscopeEmail := func(c *gin.Context) {
+\t\tif guardClientEmailScope(c, &a.clientService, c.Param("email")) { c.Next() }
+\t}
+\tscopeSubID := func(c *gin.Context) {
+\t\tif guardClientSubIdScope(c, &a.clientService, c.Param("subId")) { c.Next() }
+\t}
+"""
     dst = replace_once(dst, marker, closures, "client scope closures")
     pairs = [
         ('g.GET("/get/:email", a.get)', 'g.GET("/get/:email", scopeEmail, a.get)'),
@@ -550,18 +573,36 @@ def patch_clients(dst):
         ('g.DELETE("/hwids/:email", a.clearHwids)', 'g.DELETE("/hwids/:email", scopeEmail, a.clearHwids)'),
         ('g.DELETE("/hwids/:email/:id", a.deleteHwid)', 'g.DELETE("/hwids/:email/:id", scopeEmail, a.deleteHwid)'),
     ]
-    for old, new in pairs: dst = replace_once(dst, old, new, old)
+    for old, new in pairs:
+        dst = replace_once(dst, old, new, old)
+
     listpaged = """\tif session.IsScoped(c) {
 \t\tparams.ScopeEnabled = true
 \t\tparams.ScopeInboundIDs = service.AllowedInboundIDs(session.GetLoginUser(c))
 \t}
 \tresp, err := a.clientService.ListPaged(&a.inboundService, &a.settingService, params)"""
-    dst = replace_once(dst,
+    dst = replace_once(
+        dst,
         "\tresp, err := a.clientService.ListPaged(&a.inboundService, &a.settingService, params)",
         listpaged,
         "scope-aware paginated client listing",
     )
+
+    dst = replace_once(
+        dst,
+        "\tneedRestart, err := a.clientService.Create(&a.inboundService, &payload)",
+        "\tif !guardInboundIdsScope(c, payload.InboundIds) {\n\t\treturn\n\t}\n\tif !a.enforceResellerQuota(c) {\n\t\treturn\n\t}\n\tneedRestart, err := a.clientService.Create(&a.inboundService, &payload)",
+        "client create scope and quota checks",
+    )
+    dst = replace_once(
+        dst,
+        "\tjsonMsgObj(c, I18nWeb(c, \"pages.inbounds.toasts.inboundClientAddSuccess\"), pendingNodeObj(a.inboundService.AnyNodePending(payload.InboundIds)), nil)",
+        "\ta.incrementResellerCreated(c, 1)\n\tjsonMsgObj(c, I18nWeb(c, \"pages.inbounds.toasts.inboundClientAddSuccess\"), pendingNodeObj(a.inboundService.AnyNodePending(payload.InboundIds)), nil)",
+        "reseller created-client counter",
+    )
     return replace_once(dst, "jsonObj(c, rows, nil)", "jsonObj(c, filterClientsForRole(c, rows), nil)", "client list filter")
+
+
 
 def rewrite_installer(root):
     count = 0
@@ -762,7 +803,7 @@ def main():
         ip = output / "internal/web/controller/inbound.go"
         ip.write_text(patch_inbounds(ip.read_text(encoding="utf-8")), encoding="utf-8", newline="")
         cp = output / "internal/web/controller/client.go"
-        cp.write_text(patch_clients(cp.read_text(encoding="utf-8")), encoding="utf-8", newline="")
+        cp.write_text(patch_clients((source / "internal/web/controller/client.go").read_text(encoding="utf-8"), cp.read_text(encoding="utf-8")), encoding="utf-8", newline="")
         pagingp = output / "internal/web/service/client_paging.go"
         pagingp.write_text(patch_client_paging(pagingp.read_text(encoding="utf-8")), encoding="utf-8", newline="")
         rb = output / "internal/web/middleware/rbac.go"
