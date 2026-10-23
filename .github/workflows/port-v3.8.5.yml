@@ -9,6 +9,7 @@ on:
       - .github/workflows/port-v3.8.5.yml
       - tools/port-v3.8.5.py
       - frontend/src/pages/api-docs/endpoints.ts
+      - frontend/src/**
 
 permissions:
   contents: write
