@@ -172,7 +172,7 @@ def block(text, start, end):
 def patch_role_tests(dst):
     if '"strconv"' not in dst[:dst.find(")\n\n")]:
         dst = replace_once(dst, '\t"testing"\n', '\t"strconv"\n\t"testing"\n', "role-test strconv import")
-    return dst.replace("itoa(role.Id)", "strconv.Itoa(role.Id)")
+    return dst.replace("itoa(role.Id)", "strconv.Itoa(role.Id)").replace("itoa(id)", "strconv.Itoa(id)")
 
 
 def patch_migration_models(dst):
@@ -859,8 +859,9 @@ def main():
         for rel in RBAC_FILES:
             if copy_item(source / rel, rel, output): copied.append(rel)
 
-        role_test_path = output / "internal/web/service/role_test.go"
-        role_test_path.write_text(patch_role_tests(role_test_path.read_text(encoding="utf-8")), encoding="utf-8", newline="")
+        for rel in ("internal/web/service/role_test.go", "internal/web/service/admin_reseller_inbounds_test.go"):
+            test_path = output / rel
+            test_path.write_text(patch_role_tests(test_path.read_text(encoding="utf-8")), encoding="utf-8", newline="")
 
         sessp = output / "internal/web/session/session.go"
         sessp.write_text(patch_session((source / "internal/web/session/session.go").read_text(encoding="utf-8"),
