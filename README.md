@@ -1,6 +1,6 @@
 [English](/README.md) | [فارسی](/README.fa_IR.md) | [العربية](/README.ar_EG.md) | [中文](/README.zh_CN.md) | [Español](/README.es_ES.md) | [Русский](/README.ru_RU.md) | [Türkçe](/README.tr_TR.md)
 
-# 3X-UI — RBAC Fork (admin6501)
+# 3X-UI Advanced — v3.8.5 admin fork
 
 A customized fork of [MHSanaei/3X-UI](https://github.com/MHSanaei/3x-ui) — an advanced, open-source web panel for managing [Xray-core](https://github.com/XTLS/Xray-core) servers — extended with a built-in **multi-admin RBAC system**, **reseller scoping**, and a **fully offline installer** for air-gapped or restricted servers.
 
@@ -67,7 +67,7 @@ Beyond the basics above, the panel also includes:
 ## Quick Start (online)
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/admin6501/3x-ui/main/install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/Azizpouryan/3x-ui-advanced/main/install.sh)
 ```
 
 A random username, password, and web base path are generated during install. Run `x-ui` afterwards to open the management menu (start/stop, reset credentials, manage SSL, etc.).

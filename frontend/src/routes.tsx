@@ -20,7 +20,24 @@ const ApiDocsPage = lazy(() => import('@/pages/api-docs/ApiDocsPage'));
 const TutorialsPage = lazy(() => import('@/pages/tutorials/TutorialsPage'));
 
 function withSuspense(node: React.ReactNode) {
-  return <Suspense fallback={null}>{node}</Suspense>;
+  return (
+    <Suspense
+      fallback={
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            minHeight: '60vh',
+          }}
+        >
+          <Spin size="large" />
+        </div>
+      }
+    >
+      {node}
+    </Suspense>
+  );
 }
 
 // The panel-wide dashboard shows stats a reseller is not allowed to see, so it

@@ -21,6 +21,16 @@ function renderModal(outbound: Record<string, unknown> | null = null) {
   );
 }
 
+function toggleSockoptsSwitch() {
+  const item = Array.from(document.querySelectorAll('.ant-form-item')).find(
+    (el) =>
+      (el.querySelector('.ant-form-item-label label')?.textContent ?? '').trim() === 'Sockopts',
+  );
+  const control = item?.querySelector('.ant-switch');
+  if (!control) throw new Error('Sockopts switch not found');
+  fireEvent.click(control);
+}
+
 describe('OutboundFormModal', () => {
   it('renders add mode without crashing', () => {
     renderModal(null);
@@ -38,7 +48,9 @@ describe('OutboundFormModal', () => {
       chooseSelectOption('protocol', proto);
       // Flush antd Form.useWatch('protocol') so protocol-specific fields render before
       // reading; otherwise every iteration sees the same default (vless) DOM.
-      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
       labelsByProto[proto] = fieldLabels();
     }
 

@@ -12,6 +12,8 @@ export default defineConfig({
   },
   test: {
     globals: false,
+    // Keep jsdom-heavy form tests within the memory budget of local and CI runners.
+    maxWorkers: 2,
     projects: [
       {
         extends: true,

@@ -19,19 +19,18 @@ export function InboundSpeedTag({ speed, withTooltip = false }: InboundSpeedTagP
   const tag = (
     <Tag color="blue">
       ↑ {SizeFormatter.speedFormat(speed.up)}
-      {' / '}
-      ↓ {SizeFormatter.speedFormat(speed.down)}
+      {' / '}↓ {SizeFormatter.speedFormat(speed.down)}
     </Tag>
   );
   if (!withTooltip) return tag;
   return (
     <Tooltip
-      title={(
+      title={
         <div>
           <div>↑ {SizeFormatter.speedFormat(speed.up)}</div>
           <div>↓ {SizeFormatter.speedFormat(speed.down)}</div>
         </div>
-      )}
+      }
     >
       {tag}
     </Tooltip>

@@ -116,8 +116,11 @@ func (m *Manager) RemoteFor(node *model.Node) (*Remote, error) {
 
 func (m *Manager) InvalidateNode(nodeID int) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	delete(m.remotes, nodeID)
+	m.mu.Unlock()
+	nodeClientsMu.Lock()
+	dropNodeClients(nodeID, "")
+	nodeClientsMu.Unlock()
 }
 
 func loadNode(id int) (*model.Node, error) {

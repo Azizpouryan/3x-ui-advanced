@@ -56,7 +56,9 @@ export default function ClientTrafficCell({
     'client-traffic-cell',
     compact ? 'is-compact' : '',
     display.isUnlimited ? 'is-unlimited' : '',
-  ].filter(Boolean).join(' ');
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   return (
     <Popover content={popover} trigger={['hover', 'click']} placement="top">

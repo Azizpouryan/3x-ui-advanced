@@ -80,7 +80,7 @@ func (a *IndexController) login(c *gin.Context) {
 	timeStr := time.Now().Format("2006-01-02 15:04:05")
 	if blockedUntil, ok := defaultLoginLimiter.allow(remoteIP, form.Username); !ok {
 		reason := "too many failed attempts"
-		logger.Warningf("failed login: username=%q, IP=%q, reason=%q, blocked_until=%s", safeUser, remoteIP, reason, blockedUntil.Format(time.RFC3339))
+		logger.Warningf("failed login: username=%q, IP=%q, reason=%q, blocked_until=%s", form.Username, remoteIP, reason, blockedUntil.Format(time.RFC3339))
 		a.tgbot.UserLoginNotify(tgbot.LoginAttempt{
 			Username: safeUser,
 			IP:       remoteIP,
@@ -97,9 +97,9 @@ func (a *IndexController) login(c *gin.Context) {
 	if user == nil {
 		reason := loginFailureReason(checkErr)
 		if blockedUntil, blocked := defaultLoginLimiter.registerFailure(remoteIP, form.Username); blocked {
-			logger.Warningf("failed login: username=%q, IP=%q, reason=%q, blocked_until=%s", safeUser, remoteIP, reason, blockedUntil.Format(time.RFC3339))
+			logger.Warningf("failed login: username=%q, IP=%q, reason=%q, blocked_until=%s", form.Username, remoteIP, reason, blockedUntil.Format(time.RFC3339))
 		} else {
-			logger.Warningf("failed login: username=%q, IP=%q, reason=%q", safeUser, remoteIP, reason)
+			logger.Warningf("failed login: username=%q, IP=%q, reason=%q", form.Username, remoteIP, reason)
 		}
 		a.tgbot.UserLoginNotify(tgbot.LoginAttempt{
 			Username: safeUser,
@@ -142,7 +142,6 @@ func (a *IndexController) login(c *gin.Context) {
 		return
 	}
 
-	logger.Infof("%s logged in successfully", safeUser)
 	jsonMsg(c, I18nWeb(c, "pages.login.toasts.successLogin"), nil)
 }
 
@@ -156,7 +155,7 @@ func loginFailureReason(err error) string {
 func (a *IndexController) logout(c *gin.Context) {
 	user := session.GetLoginUser(c)
 	if user != nil {
-		logger.Infof("%s logged out successfully", user.Username)
+		logger.Infof("logged out successfully: username=%q", user.Username)
 	}
 	if err := session.ClearSession(c); err != nil {
 		logger.Warning("Unable to clear session on logout:", err)
@@ -179,7 +178,5 @@ func (a *IndexController) csrfToken(c *gin.Context) {
 // getTwoFactorEnable retrieves the current status of two-factor authentication.
 func (a *IndexController) getTwoFactorEnable(c *gin.Context) {
 	status, err := a.settingService.GetTwoFactorEnable()
-	if err == nil {
-		jsonObj(c, status, nil)
-	}
+	jsonObj(c, status, err)
 }

@@ -1,9 +1,11 @@
 package sub
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
+	"github.com/mhsanaei/3x-ui/v3/internal/amneziawg"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 )
 
@@ -38,6 +40,85 @@ func TestEnsureUniqueProxyNames(t *testing.T) {
 	}
 	if got := proxies[4]["name"]; got != "proxy-5" {
 		t.Errorf("typeless empty name fallback = %q, want proxy-5", got)
+	}
+}
+
+func TestLegacyClashProxyCompatibility(t *testing.T) {
+	t.Run("keeps legacy vmess fields", func(t *testing.T) {
+		proxy := map[string]any{
+			"name": "vm", "type": "vmess", "server": "vm.example.com", "port": 443,
+			"uuid": "11111111-2222-4333-8444-555555555555", "alterId": 0, "cipher": "auto",
+			"udp": true, "network": "ws", "tls": true, "servername": "sni.example.com",
+			"ws-opts": map[string]any{"path": "/ws"}, "client-fingerprint": "chrome", "alpn": []string{"h2"},
+		}
+
+		got := legacyClashProxy(proxy)
+		if got == nil || got["type"] != "vmess" || got["network"] != "ws" {
+			t.Fatalf("legacy vmess was filtered or changed: %#v", got)
+		}
+		for _, field := range []string{"client-fingerprint", "alpn"} {
+			if _, exists := got[field]; exists {
+				t.Fatalf("Mihomo-only field %q leaked into legacy vmess: %#v", field, got)
+			}
+		}
+	})
+
+	t.Run("keeps legacy trojan fields", func(t *testing.T) {
+		proxy := map[string]any{
+			"name": "tr", "type": "trojan", "server": "tr.example.com", "port": 443,
+			"password": "secret", "udp": true, "network": "grpc", "tls": true,
+			"sni": "sni.example.com", "servername": "sni.example.com", "alpn": []string{"h2"},
+			"grpc-opts": map[string]any{"grpc-service-name": "svc"},
+		}
+
+		got := legacyClashProxy(proxy)
+		if got == nil || got["type"] != "trojan" || got["sni"] != "sni.example.com" {
+			t.Fatalf("legacy trojan was filtered or changed: %#v", got)
+		}
+		for _, field := range []string{"tls", "servername"} {
+			if _, exists := got[field]; exists {
+				t.Fatalf("field %q is not part of the legacy Trojan schema: %#v", field, got)
+			}
+		}
+
+		withoutTLS := cloneMap(proxy)
+		withoutTLS["tls"] = false
+		if got := legacyClashProxy(withoutTLS); got != nil {
+			t.Fatalf("Trojan without TLS must not reach Clash for Windows: %#v", got)
+		}
+	})
+
+	t.Run("keeps only legacy shadowsocks ciphers", func(t *testing.T) {
+		legacy := map[string]any{
+			"name": "ss", "type": "ss", "server": "ss.example.com", "port": 443,
+			"password": "secret", "cipher": "aes-256-gcm", "udp": true, "network": "tcp", "tls": false,
+		}
+		got := legacyClashProxy(legacy)
+		if got == nil || got["type"] != "ss" {
+			t.Fatalf("legacy Shadowsocks proxy was filtered: %#v", got)
+		}
+		for _, field := range []string{"network", "tls"} {
+			if _, exists := got[field]; exists {
+				t.Fatalf("field %q is not part of the legacy Shadowsocks schema: %#v", field, got)
+			}
+		}
+
+		ss2022 := cloneMap(legacy)
+		ss2022["cipher"] = "2022-blake3-aes-256-gcm"
+		if got := legacyClashProxy(ss2022); got != nil {
+			t.Fatalf("SS-2022 must not reach Clash for Windows: %#v", got)
+		}
+	})
+
+	for _, proxy := range []map[string]any{
+		{"name": "vl", "type": "vless"},
+		{"name": "hy", "type": "hysteria2"},
+		{"name": "xh", "type": "vmess", "cipher": "auto", "network": "xhttp"},
+		{"name": "reality", "type": "vmess", "cipher": "auto", "network": "tcp", "reality-opts": map[string]any{}},
+	} {
+		if got := legacyClashProxy(proxy); got != nil {
+			t.Fatalf("modern proxy reached Clash for Windows: %#v", got)
+		}
 	}
 }
 
@@ -78,6 +159,51 @@ func TestBuildProxy_VLESSRealityFieldsForClash(t *testing.T) {
 	}
 	if opts["short-id"] != "ab12" {
 		t.Fatalf("short-id = %v, want ab12", opts["short-id"])
+	}
+	if opts["support-x25519mlkem768"] != true {
+		t.Fatalf("ML-KEM support = %v, want true", opts["support-x25519mlkem768"])
+	}
+}
+
+func TestClashRealityMLKEMAcrossSources(t *testing.T) {
+	svc := NewSubClashService(false, "", &SubService{})
+	for _, security := range []string{"reality", "tls", "none"} {
+		for _, fingerprint := range []string{"", "chrome", "firefox"} {
+			t.Run(security+"/"+fingerprint, func(t *testing.T) {
+				inbound := &model.Inbound{Listen: "example.com", Port: 443, Protocol: model.VLESS, Settings: `{"encryption":"none"}`}
+				client := model.Client{ID: "11111111-2222-4333-8444-555555555555"}
+				stream := svc.streamData(fmt.Sprintf(`{"network":"tcp","security":%q,"realitySettings":{"serverNames":["example.com"],"shortIds":["ab12"],"settings":{"publicKey":"PBKvalue","fingerprint":%q}}}`, security, fingerprint))
+				link := "vless://" + client.ID + "@example.com:443?type=tcp&security=" + security + "&sni=example.com&pbk=PBKvalue&sid=ab12&fp=" + fingerprint
+				for source, proxy := range map[string]map[string]any{
+					"inbound":  svc.buildProxy(svc.SubService, inbound, client, stream, nil),
+					"external": svc.clashProxyFromExternal(link, "external"),
+				} {
+					if proxy == nil {
+						t.Fatalf("%s: missing proxy", source)
+					}
+					opts, exists := proxy["reality-opts"].(map[string]any)
+					if security != "reality" {
+						if exists {
+							t.Fatalf("%s: REALITY options leaked into %s: %#v", source, security, opts)
+						}
+						continue
+					}
+					if opts["support-x25519mlkem768"] != true || opts["public-key"] != "PBKvalue" || opts["short-id"] != "ab12" {
+						t.Fatalf("%s: incorrect REALITY options: %#v", source, opts)
+					}
+					wantFingerprint := fingerprint
+					if wantFingerprint == "" {
+						wantFingerprint = "chrome"
+					}
+					if proxy["client-fingerprint"] != wantFingerprint {
+						t.Fatalf("%s: fingerprint = %v, want %s", source, proxy["client-fingerprint"], wantFingerprint)
+					}
+					if legacyClashProxy(proxy) != nil {
+						t.Fatalf("%s: REALITY must stay excluded from legacy Clash", source)
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -251,6 +377,31 @@ func TestBuildProxy_VLESSFlowXhttpRealityVlessenc(t *testing.T) {
 
 	if proxy["flow"] != "xtls-rprx-vision" {
 		t.Fatalf("xhttp+reality+vlessenc Clash proxy must carry the vision flow (#5232): %#v", proxy)
+	}
+}
+
+func TestBuildProxy_VLESSFlowSuppressedByDisableFlow(t *testing.T) {
+	svc := &SubClashService{SubService: &SubService{}}
+	inbound := &model.Inbound{
+		Listen:      "203.0.113.1",
+		Port:        443,
+		Protocol:    model.VLESS,
+		Remark:      "disabled-flow",
+		Settings:    `{"encryption":"` + testMlkemEncryption + `"}`,
+		DisableFlow: true,
+	}
+	client := model.Client{ID: "11111111-2222-4333-8444-555555555555", Flow: "xtls-rprx-vision"}
+	stream := map[string]any{
+		"network":         "xhttp",
+		"xhttpSettings":   map[string]any{"path": "/", "mode": "auto"},
+		"security":        "reality",
+		"realitySettings": map[string]any{"publicKey": "pub", "serverName": "example.com", "shortId": "abcd"},
+	}
+
+	proxy := svc.buildProxy(svc.SubService, inbound, client, stream, nil)
+
+	if _, ok := proxy["flow"]; ok {
+		t.Fatalf("DisableFlow inbound must not carry a flow in the Clash proxy: %#v", proxy)
 	}
 }
 

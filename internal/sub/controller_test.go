@@ -147,3 +147,44 @@ func TestLoadSubTemplate_CacheHitAndInvalidation(t *testing.T) {
 		t.Fatalf("rendered = %q, want %q after edit", buf.String(), "v2")
 	}
 }
+
+func TestStandardSubscriptionPreservesClashUserAgents(t *testing.T) {
+	seedSubDB(t)
+	seedSubProtocolInbound(t, "s1", "vm", 4905, 1, `{"network":"tcp","security":"none"}`, model.VMESS)
+	gin.SetMode(gin.TestMode)
+	router := newSubscriptionTestRouter(subscriptionTestRouterConfig{clashAutoDetect: true})
+	for _, ua := range []string{"mihomo/1.19.12", "clash.meta", "Clash.Meta/1.19.12", "ClashX Meta/1.0", "ClashforWindows/0.20.39"} {
+		t.Run(ua, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://sub.example.com/sub/s1", nil)
+			req.Header.Set("User-Agent", ua)
+			resp := httptest.NewRecorder()
+			router.ServeHTTP(resp, req)
+			if resp.Code != http.StatusOK || resp.Header().Get("Content-Type") != "application/yaml; charset=utf-8" || !strings.Contains(resp.Body.String(), "type: vmess") {
+				t.Fatalf("UA=%q: status=%d, content-type=%q; expected VMess YAML, body=%s", ua, resp.Code, resp.Header().Get("Content-Type"), resp.Body.String())
+			}
+		})
+	}
+}
+
+func TestLegacyClashEndpointNormalizesShadowsocksCipher(t *testing.T) {
+	for _, method := range []string{"chacha20-ietf-poly1305", "chacha20-poly1305"} {
+		t.Run(method, func(t *testing.T) {
+			seedSubDB(t)
+			ib := seedSubProtocolInbound(t, "s1", "ss", 4906, 1, `{"network":"tcp","security":"none"}`, model.Shadowsocks)
+			db := database.GetDB()
+			if err := db.Model(ib).Update("settings", fmt.Sprintf(`{"method":%q,"network":"tcp,udp"}`, method)).Error; err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Model(&model.ClientRecord{}).Where("email = ?", "ss@e").Update("password", "test-password").Error; err != nil {
+				t.Fatal(err)
+			}
+			gin.SetMode(gin.TestMode)
+			req := httptest.NewRequest(http.MethodGet, "http://sub.example.com/clash-legacy/s1", nil)
+			resp := httptest.NewRecorder()
+			newSubscriptionTestRouter(subscriptionTestRouterConfig{}).ServeHTTP(resp, req)
+			if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), "type: ss") || !strings.Contains(resp.Body.String(), "cipher: chacha20-ietf-poly1305") {
+				t.Fatalf("method=%s: status=%d, body=%s", method, resp.Code, resp.Body.String())
+			}
+		})
+	}
+}

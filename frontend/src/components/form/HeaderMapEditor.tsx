@@ -23,10 +23,7 @@ import { InputAddon } from '@/components/ui';
 
 export type HeaderMapMode = 'v1' | 'v2';
 
-export type HeaderMapValue =
-  | Record<string, string>
-  | Record<string, string[]>
-  | undefined;
+export type HeaderMapValue = Record<string, string> | Record<string, string[]> | undefined;
 
 interface HeaderRow {
   name: string;
@@ -54,7 +51,10 @@ function mapToRows(value: HeaderMapValue): HeaderRow[] {
   return out;
 }
 
-function rowsToMap(rows: HeaderRow[], mode: HeaderMapMode): Record<string, string> | Record<string, string[]> {
+function rowsToMap(
+  rows: HeaderRow[],
+  mode: HeaderMapMode,
+): Record<string, string> | Record<string, string[]> {
   if (mode === 'v1') {
     const map: Record<string, string> = {};
     for (const r of rows) {

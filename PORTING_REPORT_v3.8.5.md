@@ -1,0 +1,519 @@
+3X-UI v3.8.5 Port Report
+=========================
+
+Upstream target: MHSanaei/3x-ui tag v3.8.5.
+Three-way file baseline: MHSanaei/3x-ui tag v3.6.0.
+Conflict policy: auto-merge non-overlapping changes; conflicting text hunks keep the current admin fork and are listed for manual review.
+GitHub Actions workflow files are deliberately preserved from the current branch because this workflow's token cannot push edits to .github/workflows; review workflow changes separately.
+
+Merge statistics
+----------------
+Base files: 1489
+Current fork files: 1039
+Upstream files: 1930
+Clean merges: 81
+Conflict hunks resolved toward the admin fork: 101
+Files containing conflict hunks or merge fallbacks: 295
+Files where git merge-file failed and a side was selected: 194
+Current-side files selected: 338
+Upstream-side files selected: 1051
+Fork-only paths preserved: 137
+Paths removed by three-way deletion rules: 379
+Files with fork release URLs redirected: 6
+
+Files needing manual review
+---------------------------
+- CONTRIBUTING.md
+- README.ar_EG.md
+- README.es_ES.md
+- README.fa_IR.md
+- README.md
+- README.ru_RU.md
+- README.tr_TR.md
+- README.zh_CN.md
+- docs/custom-subscription-templates.md
+- frontend/README.md
+- frontend/public/openapi.json
+- frontend/src/api/queries/useAllSettings.ts
+- frontend/src/api/queries/useHostMutations.ts
+- frontend/src/api/queries/useNodeMutations.ts
+- frontend/src/components/clients/ClientTrafficCell.tsx
+- frontend/src/components/feedback/PromptModal.tsx
+- frontend/src/components/feedback/TextModal.tsx
+- frontend/src/components/form/DateTimePicker.tsx
+- frontend/src/components/form/HeaderMapEditor.tsx
+- frontend/src/components/form/RemarkTemplateField.tsx
+- frontend/src/components/form/RemarkVarPicker.tsx
+- frontend/src/components/ui/InputAddon.tsx
+- frontend/src/components/ui/SettingListItem.tsx
+- frontend/src/components/ui/notifications/EmailNotifications.tsx
+- frontend/src/components/ui/notifications/NotificationCard.tsx
+- frontend/src/components/ui/notifications/NotificationHeader.tsx
+- frontend/src/components/ui/notifications/TelegramNotifications.tsx
+- frontend/src/components/ui/notifications/types.ts
+- frontend/src/components/viz/Sparkline.tsx
+- frontend/src/generated/examples.ts
+- frontend/src/generated/schemas.ts
+- frontend/src/generated/types.ts
+- frontend/src/generated/zod.ts
+- frontend/src/hooks/useClients.ts
+- frontend/src/hooks/useTheme.tsx
+- frontend/src/hooks/useXraySetting.ts
+- frontend/src/layouts/AppSidebar.css
+- frontend/src/layouts/AppSidebar.tsx
+- frontend/src/lib/hosts/host-link.ts
+- frontend/src/lib/remark/remarkVariables.ts
+- frontend/src/lib/xray/forms/SniffingFields.tsx
+- frontend/src/lib/xray/forms/transport/FinalMaskForm.tsx
+- frontend/src/lib/xray/inbound-defaults.ts
+- frontend/src/lib/xray/inbound-form-adapter.ts
+- frontend/src/lib/xray/inbound-link.ts
+- frontend/src/lib/xray/link-label.tsx
+- frontend/src/lib/xray/outbound-form-adapter.ts
+- frontend/src/lib/xray/outbound-link-parser.ts
+- frontend/src/models/dbinbound.ts
+- frontend/src/models/setting.ts
+- frontend/src/pages/api-docs/ApiDocsPage.tsx
+- frontend/src/pages/api-docs/endpoints.ts
+- frontend/src/pages/clients/BulkAttachInboundsModal.tsx
+- frontend/src/pages/clients/BulkDetachInboundsModal.tsx
+- frontend/src/pages/clients/ClientBulkAddModal.tsx
+- frontend/src/pages/clients/ClientBulkAdjustModal.tsx
+- frontend/src/pages/clients/ClientFormModal.tsx
+- frontend/src/pages/clients/ClientInfoModal.tsx
+- frontend/src/pages/clients/ClientQrModal.tsx
+- frontend/src/pages/clients/ClientsPage.tsx
+- frontend/src/pages/clients/SubLinksModal.tsx
+- frontend/src/pages/groups/GroupAddClientsModal.tsx
+- frontend/src/pages/groups/GroupRemoveClientsModal.tsx
+- frontend/src/pages/groups/GroupsPage.tsx
+- frontend/src/pages/hosts/HostFormModal.tsx
+- frontend/src/pages/hosts/HostList.tsx
+- frontend/src/pages/hosts/HostsPage.tsx
+- frontend/src/pages/hosts/json-forms/HostMuxForm.tsx
+- frontend/src/pages/hosts/json-forms/HostSockoptForm.tsx
+- frontend/src/pages/inbounds/InboundsPage.tsx
+- frontend/src/pages/inbounds/form/FallbacksCard.tsx
+- frontend/src/pages/inbounds/form/InboundFormModal.tsx
+- frontend/src/pages/inbounds/form/SniffingTab.tsx
+- frontend/src/pages/inbounds/form/advanced-editors.tsx
+- frontend/src/pages/inbounds/form/protocols/accounts-list.tsx
+- frontend/src/pages/inbounds/form/protocols/hysteria.tsx
+- frontend/src/pages/inbounds/form/protocols/mixed.tsx
+- frontend/src/pages/inbounds/form/protocols/mtproto.tsx
+- frontend/src/pages/inbounds/form/protocols/shadowsocks.tsx
+- frontend/src/pages/inbounds/form/protocols/tunnel.tsx
+- frontend/src/pages/inbounds/form/protocols/vless.tsx
+- frontend/src/pages/inbounds/form/protocols/wireguard.tsx
+- frontend/src/pages/inbounds/form/security/reality.tsx
+- frontend/src/pages/inbounds/form/security/tls.tsx
+- frontend/src/pages/inbounds/form/transport/httpupgrade.tsx
+- frontend/src/pages/inbounds/form/transport/kcp.tsx
+- frontend/src/pages/inbounds/form/transport/raw.tsx
+- frontend/src/pages/inbounds/form/transport/sockopt.tsx
+- frontend/src/pages/inbounds/form/transport/xhttp.tsx
+- frontend/src/pages/inbounds/form/useSecurityActions.ts
+- frontend/src/pages/inbounds/info/InboundInfoModal.tsx
+- frontend/src/pages/inbounds/info/helpers.ts
+- frontend/src/pages/inbounds/list/InboundList.tsx
+- frontend/src/pages/inbounds/list/InboundSpeedTag.tsx
+- frontend/src/pages/inbounds/list/RowActions.tsx
+- frontend/src/pages/inbounds/list/helpers.ts
+- frontend/src/pages/inbounds/list/useInboundColumns.tsx
+- frontend/src/pages/inbounds/qr/QrCodeModal.tsx
+- frontend/src/pages/inbounds/qr/QrPanel.tsx
+- frontend/src/pages/inbounds/useInbounds.ts
+- frontend/src/pages/index/BackupModal.tsx
+- frontend/src/pages/index/IndexPage.css
+- frontend/src/pages/index/IndexPage.tsx
+- frontend/src/pages/index/LogModal.tsx
+- frontend/src/pages/index/PanelUpdateModal.tsx
+- frontend/src/pages/index/SystemHistoryModal.tsx
+- frontend/src/pages/index/XrayLogModal.tsx
+- frontend/src/pages/login/LoginPage.tsx
+- frontend/src/pages/nodes/NodeFormModal.tsx
+- frontend/src/pages/nodes/NodeList.tsx
+- frontend/src/pages/nodes/NodesPage.tsx
+- frontend/src/pages/settings/EmailTab.tsx
+- frontend/src/pages/settings/GeneralTab.tsx
+- frontend/src/pages/settings/SecurityTab.tsx
+- frontend/src/pages/settings/SettingsPage.tsx
+- frontend/src/pages/settings/SubscriptionFormatsTab.tsx
+- frontend/src/pages/settings/SubscriptionGeneralTab.tsx
+- frontend/src/pages/settings/TelegramTab.tsx
+- frontend/src/pages/settings/TwoFactorModal.tsx
+- frontend/src/pages/settings/catTabLabel.tsx
+- frontend/src/pages/sub/SubPage.css
+- frontend/src/pages/sub/SubPage.tsx
+- frontend/src/pages/xray/XrayPage.tsx
+- frontend/src/pages/xray/balancers/BalancerFormModal.tsx
+- frontend/src/pages/xray/balancers/BalancersTab.tsx
+- frontend/src/pages/xray/balancers/balancer-helpers.ts
+- frontend/src/pages/xray/basics/BasicsTab.tsx
+- frontend/src/pages/xray/basics/constants.ts
+- frontend/src/pages/xray/basics/helpers.ts
+- frontend/src/pages/xray/dns/DnsPresetsModal.tsx
+- frontend/src/pages/xray/dns/DnsServerModal.tsx
+- frontend/src/pages/xray/dns/DnsTab.tsx
+- frontend/src/pages/xray/dns/useDnsColumns.tsx
+- frontend/src/pages/xray/outbounds/OutboundCardList.tsx
+- frontend/src/pages/xray/outbounds/OutboundFormModal.tsx
+- frontend/src/pages/xray/outbounds/OutboundsTab.tsx
+- frontend/src/pages/xray/outbounds/SubscriptionOutbounds.tsx
+- frontend/src/pages/xray/outbounds/outbounds-tab-helpers.ts
+- frontend/src/pages/xray/outbounds/protocols/blackhole.tsx
+- frontend/src/pages/xray/outbounds/protocols/dns.tsx
+- frontend/src/pages/xray/outbounds/protocols/freedom.tsx
+- frontend/src/pages/xray/outbounds/protocols/wireguard.tsx
+- frontend/src/pages/xray/outbounds/security/reality.tsx
+- frontend/src/pages/xray/outbounds/security/tls.tsx
+- frontend/src/pages/xray/outbounds/transport/httpupgrade.tsx
+- frontend/src/pages/xray/outbounds/transport/hysteria.tsx
+- frontend/src/pages/xray/outbounds/transport/kcp.tsx
+- frontend/src/pages/xray/outbounds/transport/mux.tsx
+- frontend/src/pages/xray/outbounds/transport/raw.tsx
+- frontend/src/pages/xray/outbounds/transport/sockopt.tsx
+- frontend/src/pages/xray/outbounds/transport/xhttp.tsx
+- frontend/src/pages/xray/outbounds/useOutboundColumns.tsx
+- frontend/src/pages/xray/overrides/NordModal.tsx
+- frontend/src/pages/xray/overrides/WarpModal.tsx
+- frontend/src/pages/xray/routing/RoutingBasic.tsx
+- frontend/src/pages/xray/routing/RoutingTab.tsx
+- frontend/src/pages/xray/routing/RuleCardList.tsx
+- frontend/src/pages/xray/routing/RuleFormModal.tsx
+- frontend/src/pages/xray/routing/useRoutingColumns.tsx
+- frontend/src/routes.tsx
+- frontend/src/schemas/api/host.ts
+- frontend/src/schemas/client.ts
+- frontend/src/schemas/dns.ts
+- frontend/src/schemas/forms/inbound-form.ts
+- frontend/src/schemas/node.ts
+- frontend/src/schemas/protocols/inbound/mtproto.ts
+- frontend/src/schemas/protocols/inbound/tunnel.ts
+- frontend/src/schemas/protocols/inbound/wireguard.ts
+- frontend/src/schemas/protocols/shared/vmess.ts
+- frontend/src/schemas/protocols/stream/external-proxy.ts
+- frontend/src/schemas/protocols/stream/index.ts
+- frontend/src/schemas/setting.ts
+- frontend/src/schemas/xray.ts
+- frontend/src/test/balancer-observatory-sync.test.ts
+- frontend/src/test/dns.test.ts
+- frontend/src/test/finalmask.test.ts
+- frontend/src/test/host-link.test.ts
+- frontend/src/test/inbound-form-adapter.test.ts
+- frontend/src/test/inbound-form-blocks.test.tsx
+- frontend/src/test/inbound-form-modal.test.tsx
+- frontend/src/test/inbound-link.test.ts
+- frontend/src/test/link-label.test.ts
+- frontend/src/test/outbound-form-adapter.test.ts
+- frontend/src/test/outbound-form-modal.test.tsx
+- frontend/src/test/outbound-link-parser.test.ts
+- frontend/src/test/stream-wire-normalize.test.ts
+- frontend/src/test/stream.test.ts
+- frontend/src/utils/index.ts
+- frontend/vitest.config.ts
+- install.sh
+- internal/config/version
+- internal/database/db.go
+- internal/database/db_seed_test.go
+- internal/database/model/model.go
+- internal/logger/logger.go
+- internal/sub/clash_service.go
+- internal/sub/clash_service_test.go
+- internal/sub/controller.go
+- internal/sub/controller_test.go
+- internal/sub/endpoint_test.go
+- internal/sub/external_config.go
+- internal/sub/external_config_test.go
+- internal/sub/external_only_sub_test.go
+- internal/sub/external_subscription.go
+- internal/sub/external_subscription_test.go
+- internal/sub/host_sub.go
+- internal/sub/host_sub_test.go
+- internal/sub/json_service.go
+- internal/sub/json_service_test.go
+- internal/sub/mutation_audit_test.go
+- internal/sub/remark_vars.go
+- internal/sub/remark_vars_test.go
+- internal/sub/service.go
+- internal/sub/service_test.go
+- internal/sub/sub.go
+- internal/util/link/outbound.go
+- internal/util/link/outbound_test.go
+- internal/web/controller/api.go
+- internal/web/controller/client.go
+- internal/web/controller/inbound.go
+- internal/web/controller/index.go
+- internal/web/controller/server.go
+- internal/web/controller/setting.go
+- internal/web/controller/xray_setting.go
+- internal/web/entity/entity.go
+- internal/web/job/check_client_ip_job.go
+- internal/web/job/check_client_ip_job_integration_test.go
+- internal/web/job/ldap_sync_job.go
+- internal/web/job/node_traffic_sync_job.go
+- internal/web/job/periodic_traffic_reset_job.go
+- internal/web/runtime/local.go
+- internal/web/runtime/manager.go
+- internal/web/runtime/remote.go
+- internal/web/service/client_bulk.go
+- internal/web/service/client_crud.go
+- internal/web/service/client_inbound_apply.go
+- internal/web/service/client_link.go
+- internal/web/service/client_locks.go
+- internal/web/service/client_paging.go
+- internal/web/service/client_portable.go
+- internal/web/service/client_traffic.go
+- internal/web/service/global_traffic_test.go
+- internal/web/service/inbound.go
+- internal/web/service/inbound_clients.go
+- internal/web/service/inbound_disable.go
+- internal/web/service/inbound_fallback_runtime_test.go
+- internal/web/service/inbound_migration.go
+- internal/web/service/inbound_node.go
+- internal/web/service/inbound_node_reconcile_test.go
+- internal/web/service/inbound_traffic.go
+- internal/web/service/integration/nord.go
+- internal/web/service/node.go
+- internal/web/service/node_bulk_dispatch_test.go
+- internal/web/service/node_client_expiry_sync_test.go
+- internal/web/service/node_host_adopt_test.go
+- internal/web/service/node_mtls_test.go
+- internal/web/service/node_test.go
+- internal/web/service/outbound/probe_http_test.go
+- internal/web/service/outbound_subscription.go
+- internal/web/service/panel/api_token.go
+- internal/web/service/panel/panel.go
+- internal/web/service/panel/panel_test.go
+- internal/web/service/panel/user.go
+- internal/web/service/port_conflict_test.go
+- internal/web/service/server.go
+- internal/web/service/setting.go
+- internal/web/service/setting_security_test.go
+- internal/web/service/sync_scale_postgres_test.go
+- internal/web/service/tgbot/tgbot_client.go
+- internal/web/service/tgbot/tgbot_report.go
+- internal/web/service/tgbot/tgbot_router.go
+- internal/web/service/xray.go
+- internal/web/service/xray_config_inject_test.go
+- internal/web/service/xray_setting.go
+- internal/web/translation/ar-EG.json
+- internal/web/translation/en-US.json
+- internal/web/translation/es-ES.json
+- internal/web/translation/fa-IR.json
+- internal/web/translation/id-ID.json
+- internal/web/translation/ja-JP.json
+- internal/web/translation/pt-BR.json
+- internal/web/translation/ru-RU.json
+- internal/web/translation/tr-TR.json
+- internal/web/translation/uk-UA.json
+- internal/web/translation/vi-VN.json
+- internal/web/translation/zh-CN.json
+- internal/web/translation/zh-TW.json
+- internal/web/web.go
+- internal/xray/api.go
+- internal/xray/hot_diff.go
+- internal/xray/hot_diff_test.go
+- internal/xray/process.go
+- tools/openapigen/main.go
+- update.sh
+- x-ui.sh
+
+Merge helper errors and selected fallbacks
+------------------------------------------
+- CONTRIBUTING.md: git merge-file failed for CONTRIBUTING.md: 
+- README.ar_EG.md: git merge-file failed for README.ar_EG.md: 
+- README.es_ES.md: git merge-file failed for README.es_ES.md: 
+- README.fa_IR.md: git merge-file failed for README.fa_IR.md: 
+- README.md: git merge-file failed for README.md: 
+- README.ru_RU.md: git merge-file failed for README.ru_RU.md: 
+- README.tr_TR.md: git merge-file failed for README.tr_TR.md: 
+- README.zh_CN.md: git merge-file failed for README.zh_CN.md: 
+- frontend/public/openapi.json: git merge-file failed for frontend/public/openapi.json: 
+- frontend/src/api/queries/useAllSettings.ts: git merge-file failed for frontend/src/api/queries/useAllSettings.ts: 
+- frontend/src/api/queries/useNodeMutations.ts: git merge-file failed for frontend/src/api/queries/useNodeMutations.ts: 
+- frontend/src/components/feedback/TextModal.tsx: git merge-file failed for frontend/src/components/feedback/TextModal.tsx: 
+- frontend/src/components/form/RemarkVarPicker.tsx: git merge-file failed for frontend/src/components/form/RemarkVarPicker.tsx: 
+- frontend/src/components/ui/SettingListItem.tsx: git merge-file failed for frontend/src/components/ui/SettingListItem.tsx: 
+- frontend/src/components/ui/notifications/EmailNotifications.tsx: git merge-file failed for frontend/src/components/ui/notifications/EmailNotifications.tsx: 
+- frontend/src/components/ui/notifications/NotificationHeader.tsx: git merge-file failed for frontend/src/components/ui/notifications/NotificationHeader.tsx: 
+- frontend/src/components/ui/notifications/TelegramNotifications.tsx: git merge-file failed for frontend/src/components/ui/notifications/TelegramNotifications.tsx: 
+- frontend/src/components/viz/Sparkline.tsx: git merge-file failed for frontend/src/components/viz/Sparkline.tsx: 
+- frontend/src/generated/examples.ts: git merge-file failed for frontend/src/generated/examples.ts: 
+- frontend/src/generated/schemas.ts: git merge-file failed for frontend/src/generated/schemas.ts: 
+- frontend/src/generated/types.ts: git merge-file failed for frontend/src/generated/types.ts: 
+- frontend/src/generated/zod.ts: git merge-file failed for frontend/src/generated/zod.ts: 
+- frontend/src/hooks/useClients.ts: git merge-file failed for frontend/src/hooks/useClients.ts: 
+- frontend/src/hooks/useXraySetting.ts: git merge-file failed for frontend/src/hooks/useXraySetting.ts: 
+- frontend/src/layouts/AppSidebar.css: git merge-file failed for frontend/src/layouts/AppSidebar.css: 
+- frontend/src/layouts/AppSidebar.tsx: git merge-file failed for frontend/src/layouts/AppSidebar.tsx: 
+- frontend/src/lib/hosts/host-link.ts: git merge-file failed for frontend/src/lib/hosts/host-link.ts: 
+- frontend/src/lib/remark/remarkVariables.ts: git merge-file failed for frontend/src/lib/remark/remarkVariables.ts: 
+- frontend/src/lib/xray/forms/transport/FinalMaskForm.tsx: git merge-file failed for frontend/src/lib/xray/forms/transport/FinalMaskForm.tsx: 
+- frontend/src/lib/xray/inbound-defaults.ts: git merge-file failed for frontend/src/lib/xray/inbound-defaults.ts: 
+- frontend/src/lib/xray/inbound-form-adapter.ts: git merge-file failed for frontend/src/lib/xray/inbound-form-adapter.ts: 
+- frontend/src/lib/xray/inbound-link.ts: git merge-file failed for frontend/src/lib/xray/inbound-link.ts: 
+- frontend/src/lib/xray/link-label.tsx: git merge-file failed for frontend/src/lib/xray/link-label.tsx: 
+- frontend/src/lib/xray/outbound-form-adapter.ts: git merge-file failed for frontend/src/lib/xray/outbound-form-adapter.ts: 
+- frontend/src/lib/xray/outbound-link-parser.ts: git merge-file failed for frontend/src/lib/xray/outbound-link-parser.ts: 
+- frontend/src/models/dbinbound.ts: git merge-file failed for frontend/src/models/dbinbound.ts: 
+- frontend/src/models/setting.ts: git merge-file failed for frontend/src/models/setting.ts: 
+- frontend/src/pages/api-docs/ApiDocsPage.tsx: git merge-file failed for frontend/src/pages/api-docs/ApiDocsPage.tsx: 
+- frontend/src/pages/api-docs/endpoints.ts: git merge-file failed for frontend/src/pages/api-docs/endpoints.ts: 
+- frontend/src/pages/clients/ClientBulkAddModal.tsx: git merge-file failed for frontend/src/pages/clients/ClientBulkAddModal.tsx: 
+- frontend/src/pages/clients/ClientBulkAdjustModal.tsx: git merge-file failed for frontend/src/pages/clients/ClientBulkAdjustModal.tsx: 
+- frontend/src/pages/clients/ClientFormModal.tsx: git merge-file failed for frontend/src/pages/clients/ClientFormModal.tsx: 
+- frontend/src/pages/clients/ClientInfoModal.tsx: git merge-file failed for frontend/src/pages/clients/ClientInfoModal.tsx: 
+- frontend/src/pages/clients/ClientQrModal.tsx: git merge-file failed for frontend/src/pages/clients/ClientQrModal.tsx: 
+- frontend/src/pages/clients/ClientsPage.tsx: git merge-file failed for frontend/src/pages/clients/ClientsPage.tsx: 
+- frontend/src/pages/groups/GroupsPage.tsx: git merge-file failed for frontend/src/pages/groups/GroupsPage.tsx: 
+- frontend/src/pages/hosts/HostFormModal.tsx: git merge-file failed for frontend/src/pages/hosts/HostFormModal.tsx: 
+- frontend/src/pages/hosts/HostList.tsx: git merge-file failed for frontend/src/pages/hosts/HostList.tsx: 
+- frontend/src/pages/hosts/HostsPage.tsx: git merge-file failed for frontend/src/pages/hosts/HostsPage.tsx: 
+- frontend/src/pages/hosts/json-forms/HostMuxForm.tsx: git merge-file failed for frontend/src/pages/hosts/json-forms/HostMuxForm.tsx: 
+- frontend/src/pages/inbounds/InboundsPage.tsx: git merge-file failed for frontend/src/pages/inbounds/InboundsPage.tsx: 
+- frontend/src/pages/inbounds/form/InboundFormModal.tsx: git merge-file failed for frontend/src/pages/inbounds/form/InboundFormModal.tsx: 
+- frontend/src/pages/inbounds/form/advanced-editors.tsx: git merge-file failed for frontend/src/pages/inbounds/form/advanced-editors.tsx: 
+- frontend/src/pages/inbounds/form/protocols/hysteria.tsx: git merge-file failed for frontend/src/pages/inbounds/form/protocols/hysteria.tsx: 
+- frontend/src/pages/inbounds/form/protocols/mtproto.tsx: git merge-file failed for frontend/src/pages/inbounds/form/protocols/mtproto.tsx: 
+- frontend/src/pages/inbounds/form/protocols/shadowsocks.tsx: git merge-file failed for frontend/src/pages/inbounds/form/protocols/shadowsocks.tsx: 
+- frontend/src/pages/inbounds/form/protocols/tunnel.tsx: git merge-file failed for frontend/src/pages/inbounds/form/protocols/tunnel.tsx: 
+- frontend/src/pages/inbounds/form/protocols/vless.tsx: git merge-file failed for frontend/src/pages/inbounds/form/protocols/vless.tsx: 
+- frontend/src/pages/inbounds/form/protocols/wireguard.tsx: git merge-file failed for frontend/src/pages/inbounds/form/protocols/wireguard.tsx: 
+- frontend/src/pages/inbounds/form/security/reality.tsx: git merge-file failed for frontend/src/pages/inbounds/form/security/reality.tsx: 
+- frontend/src/pages/inbounds/form/security/tls.tsx: git merge-file failed for frontend/src/pages/inbounds/form/security/tls.tsx: 
+- frontend/src/pages/inbounds/form/transport/sockopt.tsx: git merge-file failed for frontend/src/pages/inbounds/form/transport/sockopt.tsx: 
+- frontend/src/pages/inbounds/form/transport/xhttp.tsx: git merge-file failed for frontend/src/pages/inbounds/form/transport/xhttp.tsx: 
+- frontend/src/pages/inbounds/form/useSecurityActions.ts: git merge-file failed for frontend/src/pages/inbounds/form/useSecurityActions.ts: 
+- frontend/src/pages/inbounds/info/InboundInfoModal.tsx: git merge-file failed for frontend/src/pages/inbounds/info/InboundInfoModal.tsx: 
+- frontend/src/pages/inbounds/list/InboundList.tsx: git merge-file failed for frontend/src/pages/inbounds/list/InboundList.tsx: 
+- frontend/src/pages/inbounds/list/RowActions.tsx: git merge-file failed for frontend/src/pages/inbounds/list/RowActions.tsx: 
+- frontend/src/pages/inbounds/list/useInboundColumns.tsx: git merge-file failed for frontend/src/pages/inbounds/list/useInboundColumns.tsx: 
+- frontend/src/pages/inbounds/qr/QrCodeModal.tsx: git merge-file failed for frontend/src/pages/inbounds/qr/QrCodeModal.tsx: 
+- frontend/src/pages/inbounds/qr/QrPanel.tsx: git merge-file failed for frontend/src/pages/inbounds/qr/QrPanel.tsx: 
+- frontend/src/pages/index/BackupModal.tsx: git merge-file failed for frontend/src/pages/index/BackupModal.tsx: 
+- frontend/src/pages/index/IndexPage.css: git merge-file failed for frontend/src/pages/index/IndexPage.css: 
+- frontend/src/pages/index/IndexPage.tsx: git merge-file failed for frontend/src/pages/index/IndexPage.tsx: 
+- frontend/src/pages/index/LogModal.tsx: git merge-file failed for frontend/src/pages/index/LogModal.tsx: 
+- frontend/src/pages/index/PanelUpdateModal.tsx: git merge-file failed for frontend/src/pages/index/PanelUpdateModal.tsx: 
+- frontend/src/pages/index/XrayLogModal.tsx: git merge-file failed for frontend/src/pages/index/XrayLogModal.tsx: 
+- frontend/src/pages/nodes/NodeFormModal.tsx: git merge-file failed for frontend/src/pages/nodes/NodeFormModal.tsx: 
+- frontend/src/pages/nodes/NodeList.tsx: git merge-file failed for frontend/src/pages/nodes/NodeList.tsx: 
+- frontend/src/pages/nodes/NodesPage.tsx: git merge-file failed for frontend/src/pages/nodes/NodesPage.tsx: 
+- frontend/src/pages/settings/EmailTab.tsx: git merge-file failed for frontend/src/pages/settings/EmailTab.tsx: 
+- frontend/src/pages/settings/GeneralTab.tsx: git merge-file failed for frontend/src/pages/settings/GeneralTab.tsx: 
+- frontend/src/pages/settings/SecurityTab.tsx: git merge-file failed for frontend/src/pages/settings/SecurityTab.tsx: 
+- frontend/src/pages/settings/SettingsPage.tsx: git merge-file failed for frontend/src/pages/settings/SettingsPage.tsx: 
+- frontend/src/pages/settings/SubscriptionFormatsTab.tsx: git merge-file failed for frontend/src/pages/settings/SubscriptionFormatsTab.tsx: 
+- frontend/src/pages/settings/SubscriptionGeneralTab.tsx: git merge-file failed for frontend/src/pages/settings/SubscriptionGeneralTab.tsx: 
+- frontend/src/pages/settings/TelegramTab.tsx: git merge-file failed for frontend/src/pages/settings/TelegramTab.tsx: 
+- frontend/src/pages/sub/SubPage.tsx: git merge-file failed for frontend/src/pages/sub/SubPage.tsx: 
+- frontend/src/pages/xray/balancers/BalancerFormModal.tsx: git merge-file failed for frontend/src/pages/xray/balancers/BalancerFormModal.tsx: 
+- frontend/src/pages/xray/balancers/BalancersTab.tsx: git merge-file failed for frontend/src/pages/xray/balancers/BalancersTab.tsx: 
+- frontend/src/pages/xray/balancers/balancer-helpers.ts: git merge-file failed for frontend/src/pages/xray/balancers/balancer-helpers.ts: 
+- frontend/src/pages/xray/basics/BasicsTab.tsx: git merge-file failed for frontend/src/pages/xray/basics/BasicsTab.tsx: 
+- frontend/src/pages/xray/dns/DnsServerModal.tsx: git merge-file failed for frontend/src/pages/xray/dns/DnsServerModal.tsx: 
+- frontend/src/pages/xray/dns/DnsTab.tsx: git merge-file failed for frontend/src/pages/xray/dns/DnsTab.tsx: 
+- frontend/src/pages/xray/outbounds/OutboundCardList.tsx: git merge-file failed for frontend/src/pages/xray/outbounds/OutboundCardList.tsx: 
+- frontend/src/pages/xray/outbounds/OutboundFormModal.tsx: git merge-file failed for frontend/src/pages/xray/outbounds/OutboundFormModal.tsx: 
+- frontend/src/pages/xray/outbounds/OutboundsTab.tsx: git merge-file failed for frontend/src/pages/xray/outbounds/OutboundsTab.tsx: 
+- frontend/src/pages/xray/outbounds/outbounds-tab-helpers.ts: git merge-file failed for frontend/src/pages/xray/outbounds/outbounds-tab-helpers.ts: 
+- frontend/src/pages/xray/outbounds/protocols/blackhole.tsx: git merge-file failed for frontend/src/pages/xray/outbounds/protocols/blackhole.tsx: 
+- frontend/src/pages/xray/outbounds/protocols/dns.tsx: git merge-file failed for frontend/src/pages/xray/outbounds/protocols/dns.tsx: 
+- frontend/src/pages/xray/outbounds/protocols/freedom.tsx: git merge-file failed for frontend/src/pages/xray/outbounds/protocols/freedom.tsx: 
+- frontend/src/pages/xray/outbounds/protocols/wireguard.tsx: git merge-file failed for frontend/src/pages/xray/outbounds/protocols/wireguard.tsx: 
+- frontend/src/pages/xray/outbounds/security/tls.tsx: git merge-file failed for frontend/src/pages/xray/outbounds/security/tls.tsx: 
+- frontend/src/pages/xray/outbounds/transport/hysteria.tsx: git merge-file failed for frontend/src/pages/xray/outbounds/transport/hysteria.tsx: 
+- frontend/src/pages/xray/outbounds/transport/sockopt.tsx: git merge-file failed for frontend/src/pages/xray/outbounds/transport/sockopt.tsx: 
+- frontend/src/pages/xray/outbounds/transport/xhttp.tsx: git merge-file failed for frontend/src/pages/xray/outbounds/transport/xhttp.tsx: 
+- frontend/src/pages/xray/outbounds/useOutboundColumns.tsx: git merge-file failed for frontend/src/pages/xray/outbounds/useOutboundColumns.tsx: 
+- frontend/src/pages/xray/overrides/NordModal.tsx: git merge-file failed for frontend/src/pages/xray/overrides/NordModal.tsx: 
+- frontend/src/pages/xray/overrides/WarpModal.tsx: git merge-file failed for frontend/src/pages/xray/overrides/WarpModal.tsx: 
+- frontend/src/pages/xray/routing/RoutingTab.tsx: git merge-file failed for frontend/src/pages/xray/routing/RoutingTab.tsx: 
+- frontend/src/pages/xray/routing/RuleFormModal.tsx: git merge-file failed for frontend/src/pages/xray/routing/RuleFormModal.tsx: 
+- frontend/src/pages/xray/routing/useRoutingColumns.tsx: git merge-file failed for frontend/src/pages/xray/routing/useRoutingColumns.tsx: 
+- frontend/src/schemas/api/host.ts: git merge-file failed for frontend/src/schemas/api/host.ts: 
+- frontend/src/schemas/client.ts: git merge-file failed for frontend/src/schemas/client.ts: 
+- frontend/src/schemas/node.ts: git merge-file failed for frontend/src/schemas/node.ts: 
+- frontend/src/schemas/xray.ts: git merge-file failed for frontend/src/schemas/xray.ts: 
+- frontend/src/test/balancer-observatory-sync.test.ts: git merge-file failed for frontend/src/test/balancer-observatory-sync.test.ts: 
+- frontend/src/test/host-link.test.ts: git merge-file failed for frontend/src/test/host-link.test.ts: 
+- frontend/src/test/inbound-form-adapter.test.ts: git merge-file failed for frontend/src/test/inbound-form-adapter.test.ts: 
+- frontend/src/test/inbound-form-modal.test.tsx: git merge-file failed for frontend/src/test/inbound-form-modal.test.tsx: 
+- frontend/src/test/inbound-link.test.ts: git merge-file failed for frontend/src/test/inbound-link.test.ts: 
+- frontend/src/test/outbound-form-adapter.test.ts: git merge-file failed for frontend/src/test/outbound-form-adapter.test.ts: 
+- frontend/src/test/outbound-link-parser.test.ts: git merge-file failed for frontend/src/test/outbound-link-parser.test.ts: 
+- frontend/src/utils/index.ts: git merge-file failed for frontend/src/utils/index.ts: 
+- install.sh: git merge-file failed for install.sh: 
+- internal/database/db.go: git merge-file failed for internal/database/db.go: 
+- internal/database/model/model.go: git merge-file failed for internal/database/model/model.go: 
+- internal/sub/clash_service.go: git merge-file failed for internal/sub/clash_service.go: 
+- internal/sub/controller.go: git merge-file failed for internal/sub/controller.go: 
+- internal/sub/external_subscription.go: git merge-file failed for internal/sub/external_subscription.go: 
+- internal/sub/host_sub_test.go: git merge-file failed for internal/sub/host_sub_test.go: 
+- internal/sub/json_service.go: git merge-file failed for internal/sub/json_service.go: 
+- internal/sub/json_service_test.go: git merge-file failed for internal/sub/json_service_test.go: 
+- internal/sub/mutation_audit_test.go: git merge-file failed for internal/sub/mutation_audit_test.go: 
+- internal/sub/remark_vars.go: git merge-file failed for internal/sub/remark_vars.go: 
+- internal/sub/service.go: git merge-file failed for internal/sub/service.go: 
+- internal/sub/service_test.go: git merge-file failed for internal/sub/service_test.go: 
+- internal/sub/sub.go: git merge-file failed for internal/sub/sub.go: 
+- internal/util/link/outbound.go: git merge-file failed for internal/util/link/outbound.go: 
+- internal/util/link/outbound_test.go: git merge-file failed for internal/util/link/outbound_test.go: 
+- internal/web/controller/api.go: git merge-file failed for internal/web/controller/api.go: 
+- internal/web/controller/client.go: git merge-file failed for internal/web/controller/client.go: 
+- internal/web/controller/server.go: git merge-file failed for internal/web/controller/server.go: 
+- internal/web/controller/setting.go: git merge-file failed for internal/web/controller/setting.go: 
+- internal/web/controller/xray_setting.go: git merge-file failed for internal/web/controller/xray_setting.go: 
+- internal/web/entity/entity.go: git merge-file failed for internal/web/entity/entity.go: 
+- internal/web/job/check_client_ip_job.go: git merge-file failed for internal/web/job/check_client_ip_job.go: 
+- internal/web/job/ldap_sync_job.go: git merge-file failed for internal/web/job/ldap_sync_job.go: 
+- internal/web/job/node_traffic_sync_job.go: git merge-file failed for internal/web/job/node_traffic_sync_job.go: 
+- internal/web/job/periodic_traffic_reset_job.go: git merge-file failed for internal/web/job/periodic_traffic_reset_job.go: 
+- internal/web/runtime/local.go: git merge-file failed for internal/web/runtime/local.go: 
+- internal/web/runtime/remote.go: git merge-file failed for internal/web/runtime/remote.go: 
+- internal/web/service/client_bulk.go: git merge-file failed for internal/web/service/client_bulk.go: 
+- internal/web/service/client_crud.go: git merge-file failed for internal/web/service/client_crud.go: 
+- internal/web/service/client_inbound_apply.go: git merge-file failed for internal/web/service/client_inbound_apply.go: 
+- internal/web/service/client_paging.go: git merge-file failed for internal/web/service/client_paging.go: 
+- internal/web/service/global_traffic_test.go: git merge-file failed for internal/web/service/global_traffic_test.go: 
+- internal/web/service/inbound.go: git merge-file failed for internal/web/service/inbound.go: 
+- internal/web/service/inbound_disable.go: git merge-file failed for internal/web/service/inbound_disable.go: 
+- internal/web/service/inbound_fallback_runtime_test.go: git merge-file failed for internal/web/service/inbound_fallback_runtime_test.go: 
+- internal/web/service/inbound_migration.go: git merge-file failed for internal/web/service/inbound_migration.go: 
+- internal/web/service/inbound_node.go: git merge-file failed for internal/web/service/inbound_node.go: 
+- internal/web/service/inbound_node_reconcile_test.go: git merge-file failed for internal/web/service/inbound_node_reconcile_test.go: 
+- internal/web/service/inbound_traffic.go: git merge-file failed for internal/web/service/inbound_traffic.go: 
+- internal/web/service/integration/nord.go: git merge-file failed for internal/web/service/integration/nord.go: 
+- internal/web/service/node.go: git merge-file failed for internal/web/service/node.go: 
+- internal/web/service/node_bulk_dispatch_test.go: git merge-file failed for internal/web/service/node_bulk_dispatch_test.go: 
+- internal/web/service/node_client_expiry_sync_test.go: git merge-file failed for internal/web/service/node_client_expiry_sync_test.go: 
+- internal/web/service/outbound_subscription.go: git merge-file failed for internal/web/service/outbound_subscription.go: 
+- internal/web/service/panel/panel.go: git merge-file failed for internal/web/service/panel/panel.go: 
+- internal/web/service/server.go: git merge-file failed for internal/web/service/server.go: 
+- internal/web/service/setting.go: git merge-file failed for internal/web/service/setting.go: 
+- internal/web/service/setting_security_test.go: git merge-file failed for internal/web/service/setting_security_test.go: 
+- internal/web/service/tgbot/tgbot_report.go: git merge-file failed for internal/web/service/tgbot/tgbot_report.go: 
+- internal/web/service/tgbot/tgbot_router.go: git merge-file failed for internal/web/service/tgbot/tgbot_router.go: 
+- internal/web/service/xray.go: git merge-file failed for internal/web/service/xray.go: 
+- internal/web/service/xray_setting.go: git merge-file failed for internal/web/service/xray_setting.go: 
+- internal/web/translation/ar-EG.json: git merge-file failed for internal/web/translation/ar-EG.json: 
+- internal/web/translation/en-US.json: git merge-file failed for internal/web/translation/en-US.json: 
+- internal/web/translation/es-ES.json: git merge-file failed for internal/web/translation/es-ES.json: 
+- internal/web/translation/fa-IR.json: git merge-file failed for internal/web/translation/fa-IR.json: 
+- internal/web/translation/id-ID.json: git merge-file failed for internal/web/translation/id-ID.json: 
+- internal/web/translation/ja-JP.json: git merge-file failed for internal/web/translation/ja-JP.json: 
+- internal/web/translation/pt-BR.json: git merge-file failed for internal/web/translation/pt-BR.json: 
+- internal/web/translation/ru-RU.json: git merge-file failed for internal/web/translation/ru-RU.json: 
+- internal/web/translation/tr-TR.json: git merge-file failed for internal/web/translation/tr-TR.json: 
+- internal/web/translation/uk-UA.json: git merge-file failed for internal/web/translation/uk-UA.json: 
+- internal/web/translation/vi-VN.json: git merge-file failed for internal/web/translation/vi-VN.json: 
+- internal/web/translation/zh-CN.json: git merge-file failed for internal/web/translation/zh-CN.json: 
+- internal/web/translation/zh-TW.json: git merge-file failed for internal/web/translation/zh-TW.json: 
+- internal/web/web.go: git merge-file failed for internal/web/web.go: 
+- internal/xray/api.go: git merge-file failed for internal/xray/api.go: 
+- internal/xray/hot_diff.go: git merge-file failed for internal/xray/hot_diff.go: 
+- update.sh: git merge-file failed for update.sh: 
+- x-ui.sh: git merge-file failed for x-ui.sh: 
+
+This is a migration candidate, not a guarantee that every bug is fixed. Run the Go tests, frontend build, and installer shell checks before deploying it. Review RBAC and database migrations especially carefully.

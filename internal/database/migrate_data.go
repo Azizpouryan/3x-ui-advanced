@@ -49,12 +49,14 @@ func migrationModels() []any {
 		&model.InboundClientIps{},
 		&model.ClientRecord{},
 		&model.ClientInbound{},
+		&model.ClientHwid{},
 		&model.ClientExternalLink{},
 		&model.InboundFallback{},
 		&model.Host{},
 		&model.NodeClientTraffic{},
 		&model.NodeClientIp{},
 		&model.OutboundSubscription{},
+		&model.SubBalancer{},
 	}
 }
 

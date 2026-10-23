@@ -69,7 +69,7 @@
 ## شروع سریع (آنلاین)
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/admin6501/3x-ui/main/install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/Azizpouryan/3x-ui-advanced/main/install.sh)
 ```
 
 در حین نصب، یک نام کاربری، رمز عبور و مسیر پایه‌ی وب تصادفی ساخته می‌شود. سپس `x-ui` را اجرا کنید تا منوی مدیریت باز شود (شروع/توقف، بازنشانی اطلاعات ورود، مدیریت SSL و …).

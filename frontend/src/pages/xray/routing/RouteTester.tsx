@@ -102,7 +102,9 @@ export default function RouteTester({ inboundTags, isMobile }: RouteTesterProps)
             allowClear
             value={inboundTag}
             onChange={setInboundTag}
-            options={inboundTags.filter(Boolean).map((tag) => ({ label: formatInboundTag(tag, remarkByTag), value: tag }))}
+            options={inboundTags
+              .filter(Boolean)
+              .map((tag) => ({ label: formatInboundTag(tag, remarkByTag), value: tag }))}
           />
         </Col>
         <Col xs={12} sm={4}>
@@ -116,14 +118,21 @@ export default function RouteTester({ inboundTags, isMobile }: RouteTesterProps)
           />
         </Col>
         <Col xs={fieldSpan} sm={3}>
-          <Button type="primary" icon={<AimOutlined />} loading={testing} disabled={!dest.trim()} onClick={run} block>
+          <Button
+            type="primary"
+            icon={<AimOutlined />}
+            loading={testing}
+            disabled={!dest.trim()}
+            onClick={run}
+            block
+          >
             {t('pages.xray.routeTesterTest')}
           </Button>
         </Col>
       </Row>
 
-      {result && (
-        result.matched ? (
+      {result &&
+        (result.matched ? (
           <Alert
             type="success"
             showIcon
@@ -135,7 +144,9 @@ export default function RouteTester({ inboundTags, isMobile }: RouteTesterProps)
                   <>
                     <span>{t('pages.xray.routeTesterViaBalancer')}:</span>
                     {(result.groupTags || []).map((tag) => (
-                      <Tag key={tag} color="orange">{tag}</Tag>
+                      <Tag key={tag} color="orange">
+                        {tag}
+                      </Tag>
                     ))}
                   </>
                 )}
@@ -144,8 +155,7 @@ export default function RouteTester({ inboundTags, isMobile }: RouteTesterProps)
           />
         ) : (
           <Alert type="warning" showIcon title={t('pages.xray.routeTesterDefaultOutbound')} />
-        )
-      )}
+        ))}
     </Space>
   );
 }

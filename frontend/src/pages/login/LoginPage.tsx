@@ -50,10 +50,7 @@ export default function LoginPage() {
   const [headlineIndex, setHeadlineIndex] = useState(0);
   const [lang, setLang] = useState<string>(() => LanguageManager.getLanguage());
 
-  const headlineWords = useMemo(
-    () => [t('pages.login.hello'), t('pages.login.title')],
-    [t],
-  );
+  const headlineWords = useMemo(() => [t('pages.login.hello'), t('pages.login.title')], [t]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -70,7 +67,9 @@ export default function LoginPage() {
       if (msg.success) setTwoFactorEnable(!!msg.obj);
       setFetched(true);
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const onSubmit = useCallback(async (values: LoginForm) => {
@@ -109,15 +108,18 @@ export default function LoginPage() {
   }, [isDark, isUltra]);
 
   const langMenuItems = useMemo(
-    () => (LanguageManager.supportedLanguages as { value: string; name: string; icon: string }[]).map((l) => ({
-      key: l.value,
-      label: (
-        <Space size={8}>
-          <span aria-hidden="true">{l.icon}</span>
-          <span>{l.name}</span>
-        </Space>
+    () =>
+      (LanguageManager.supportedLanguages as { value: string; name: string; icon: string }[]).map(
+        (l) => ({
+          key: l.value,
+          label: (
+            <Space size={8}>
+              <span aria-hidden="true">{l.icon}</span>
+              <span>{l.name}</span>
+            </Space>
+          ),
+        }),
       ),
-    })),
     [],
   );
 

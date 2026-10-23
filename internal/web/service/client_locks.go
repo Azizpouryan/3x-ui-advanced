@@ -6,6 +6,7 @@ import (
 
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
+	"github.com/mhsanaei/3x-ui/v3/internal/xray"
 
 	"gorm.io/gorm"
 )
@@ -148,6 +149,19 @@ func tombstoneClientEmail(email string) {
 	for e, ts := range recentlyDeleted {
 		if ts.Before(cutoff) {
 			delete(recentlyDeleted, e)
+		}
+	}
+}
+
+func withdrawClientTombstones(emails ...string) {
+	if len(emails) == 0 {
+		return
+	}
+	recentlyDeletedMu.Lock()
+	defer recentlyDeletedMu.Unlock()
+	for _, email := range emails {
+		if email != "" {
+			delete(recentlyDeleted, email)
 		}
 	}
 }

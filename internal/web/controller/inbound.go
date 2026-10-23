@@ -59,6 +59,15 @@ func (a *InboundController) broadcastInboundsUpdate(userId int) {
 	websocket.BroadcastInbounds(inbounds)
 }
 
+// inboundServiceFor tells the service whether this request is a master's
+// node-sync push, so the node stores the row instead of re-judging it.
+func (a *InboundController) inboundServiceFor(c *gin.Context) *service.InboundService {
+	svc := a.inboundService
+	scope, _ := c.Get("api_token_scope")
+	svc.FromNodeSync = scope == model.ApiScopeNodeSync
+	return &svc
+}
+
 // initRouter initializes the routes for inbound-related operations.
 func (a *InboundController) initRouter(g *gin.RouterGroup) {
 
@@ -150,7 +159,7 @@ func (a *InboundController) addInbound(c *gin.Context) {
 		inbound.NodeID = nil
 	}
 
-	inbound, needRestart, err := a.inboundService.AddInbound(inbound)
+	inbound, needRestart, err := a.inboundServiceFor(c).AddInbound(inbound)
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
@@ -230,7 +239,7 @@ func (a *InboundController) updateInbound(c *gin.Context) {
 	if inbound.NodeID != nil && *inbound.NodeID == 0 {
 		inbound.NodeID = nil
 	}
-	inbound, needRestart, err := a.inboundService.UpdateInbound(inbound)
+	inbound, needRestart, err := a.inboundServiceFor(c).UpdateInbound(inbound)
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
@@ -244,11 +253,30 @@ func (a *InboundController) updateInbound(c *gin.Context) {
 	notifyClientsChanged()
 }
 
-// setInboundEnable flips only the enable flag of an inbound. This is a
-// dedicated endpoint because the regular update path serialises the entire
-// settings JSON (every client) — far too heavy for an interactive switch
-// on inbounds with thousands of clients. Frontend optimistically updates
-// the UI; we just persist + sync xray + nudge other open admin sessions.
+// setInboundSubSortIndex changes only subscription ordering without sending
+// the inbound's settings/client payload.
+func (a *InboundController) setInboundSubSortIndex(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundUpdateSuccess"), err)
+		return
+	}
+	type form struct {
+		SubSortIndex int `json:"subSortIndex" form:"subSortIndex" binding:"required"`
+	}
+	var f form
+	if err := c.ShouldBind(&f); err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	if err := a.inboundService.SetInboundSubSortIndex(id, f.SubSortIndex); err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundUpdateSuccess"), nil)
+	websocket.BroadcastInvalidate(websocket.MessageTypeInbounds)
+}
+
 func (a *InboundController) setInboundEnable(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {

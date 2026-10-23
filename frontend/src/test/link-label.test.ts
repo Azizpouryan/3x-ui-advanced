@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 
 import { parseLinkParts, linkMetaText } from '@/lib/xray/link-label';
+import { genAmneziaWGLink } from '@/lib/xray/inbound-link';
+import type { AmneziawgInboundSettings } from '@/schemas/protocols/inbound/amneziawg';
 
 // The panel shows the subscription's remark verbatim. Per-client traffic/expiry
 // info is rendered only into the body a client app imports (backend, first link

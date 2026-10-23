@@ -32,8 +32,25 @@ export function useDnsServerColumns({
               trigger={['click']}
               menu={{
                 items: [
-                  { key: 'edit', label: <><EditOutlined /> {t('edit')}</>, onClick: () => openEditServer(index) },
-                  { key: 'del', danger: true, label: <><DeleteOutlined /> {t('delete')}</>, onClick: () => deleteServer(index) },
+                  {
+                    key: 'edit',
+                    label: (
+                      <>
+                        <EditOutlined /> {t('edit')}
+                      </>
+                    ),
+                    onClick: () => openEditServer(index),
+                  },
+                  {
+                    key: 'del',
+                    danger: true,
+                    label: (
+                      <>
+                        <DeleteOutlined /> {t('delete')}
+                      </>
+                    ),
+                    onClick: () => deleteServer(index),
+                  },
                 ],
               }}
             >
