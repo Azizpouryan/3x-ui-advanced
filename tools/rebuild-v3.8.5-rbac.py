@@ -95,16 +95,33 @@ func scopedRouteDenied(method, path string) bool {
         "/panel/api/admin", "/panel/api/roles", "/panel/api/server",
         "/panel/api/setting", "/panel/api/xray", "/panel/api/nodes",
         "/panel/api/hosts", "/panel/api/plans", "/panel/api/shop",
+        "/panel/api/reseller",
     } { if strings.HasPrefix(path, prefix) { return true } }
+    if strings.Contains(path, "/groups") { return true }
     if strings.HasPrefix(path, "/panel/api/inbounds") { return !isReadRoute(method, path) }
     if strings.HasPrefix(path, "/panel/api/clients") {
-        for _, ending := range []string{
-            "/import", "/export", "/delOrphans", "/resetAllTraffics", "/delDepleted",
-            "/bulkAdjust", "/bulkEnable", "/bulkDisable", "/bulkDel", "/bulkCreate",
-            "/bulkAttach", "/bulkDetach", "/bulkResetTraffic",
-        } { if strings.HasSuffix(path, ending) { return true } }
+        // Scoped accounts only see filtered lists and row-level endpoints that
+        // receive explicit database-backed scope checks. Everything else denies.
+        allowed := map[string]map[string]bool{
+            "/panel/api/clients/list": {"GET": true},
+            "/panel/api/clients/get/:email": {"GET": true},
+            "/panel/api/clients/traffic/:email": {"GET": true},
+            "/panel/api/clients/subLinks/:subId": {"GET": true},
+            "/panel/api/clients/links/:email": {"GET": true},
+            "/panel/api/clients/update/:email": {"POST": true},
+            "/panel/api/clients/del/:email": {"POST": true},
+            "/panel/api/clients/:email/externalLinks": {"POST": true},
+            "/panel/api/clients/resetTraffic/:email": {"POST": true},
+            "/panel/api/clients/updateTraffic/:email": {"POST": true},
+            "/panel/api/clients/ips/:email": {"POST": true},
+            "/panel/api/clients/clearIps/:email": {"POST": true},
+            "/panel/api/clients/hwids/:email": {"POST": true, "DELETE": true},
+            "/panel/api/clients/hwids/:email/:id": {"DELETE": true},
+        }
+        if methods, ok := allowed[path]; !ok || !methods[method] { return true }
     }
     return false
+}
 }
 '''
 
@@ -157,8 +174,17 @@ def patch_model(src, dst):
     return dst
 
 def patch_db(dst):
-    return replace_once(dst, "\t\t&model.User{},\n",
-        "\t\t&model.User{},\n\t\t&model.AdminRole{},\n\t\t&model.AdminAuditLog{},\n\t\t&model.ResellerQuotaDisabledInbound{},\n\t\t&model.Plan{},\n", "RBAC AutoMigrate entries")
+    start = dst.find("func allModels() []any {")
+    end = dst.find("\n}", start)
+    if start < 0 or end < 0:
+        raise RuntimeError("Official database model registry is missing")
+    registry = dst[start:end]
+    registry = replace_once(
+        registry, "\t\t&model.User{},\n",
+        "\t\t&model.User{},\n\t\t&model.AdminRole{},\n\t\t&model.AdminAuditLog{},\n\t\t&model.ResellerQuotaDisabledInbound{},\n\t\t&model.Plan{},\n",
+        "RBAC AutoMigrate entries",
+    )
+    return dst[:start] + registry + dst[end:]
 
 def patch_api(dst):
     marker = '\tapi.GET("/openapi.json", ServeOpenAPISpec)\n'
