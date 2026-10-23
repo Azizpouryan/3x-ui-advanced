@@ -1336,6 +1336,14 @@ install_x-ui() {
             echo -e "${red}Failed to fetch x-ui version, it may be due to GitHub API restrictions, please try it later${plain}"
             exit 1
         fi
+        # Do not accidentally install an older release while the v3.8.5 migration
+        # candidate is still failing its Go build/tests. Publish this exact tag only
+        # after the migration workflow is green and the candidate has been reviewed.
+        if [[ "$tag_version" != "v3.8.5-advanced.1" ]]; then
+            echo -e "${red}This v3.8.5 candidate is not released yet. Refusing to install the repository's older latest release (${tag_version}).${plain}"
+            echo -e "${yellow}A release named v3.8.5-advanced.1 must be published after all tests pass.${plain}"
+            exit 1
+        fi
         echo -e "Got x-ui latest version: ${tag_version}, beginning the installation..."
         curl -fLR --retry 5 --retry-delay 3 --connect-timeout 15 --max-time 300 -o ${xui_folder}-linux-$(arch).tar.gz https://github.com/Azizpouryan/3x-ui-advanced/releases/download/${tag_version}/x-ui-linux-$(arch).tar.gz
         if [[ $? -ne 0 ]]; then
