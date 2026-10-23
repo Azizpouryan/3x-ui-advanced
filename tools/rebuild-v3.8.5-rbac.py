@@ -13,6 +13,8 @@ RBAC_FILES = [
     "internal/web/controller/access.go", "internal/web/controller/admin.go",
     "internal/web/controller/role.go", "internal/web/controller/reseller.go",
     "internal/web/service/admin.go", "internal/web/service/role.go",
+    "internal/web/service/reseller_overview.go", "internal/web/service/reseller_overview_test.go",
+    "internal/web/service/admin_reseller_inbounds_test.go",
     "internal/web/service/role_test.go", "frontend/src/lib/permissions.ts",
     "frontend/src/components/form/OptionButtons.tsx", "frontend/src/components/form/OptionButtons.css",
     "frontend/src/pages/admins/AdminsPage.tsx", "frontend/src/pages/admins/AdminsPage.css",
