@@ -1,13 +1,13 @@
-name: Port admin fork to upstream v3.8.5
+name: Rebuild official v3.8.5 with admin RBAC
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - upgrade/v3.8.5-preserve-admin
+      - rebuild/v3.8.5-rbac
     paths:
       - .github/workflows/port-v3.8.5.yml
-      - tools/port-v3.8.5.py
+      - tools/rebuild-v3.8.5-rbac.py
       - frontend/src/pages/api-docs/endpoints.ts
       - frontend/src/**
       - internal/**
@@ -23,8 +23,8 @@ concurrency:
 
 jobs:
   port-and-test:
-    # Start this workflow from upgrade/v3.8.5-preserve-admin in the Actions UI.
-    if: startsWith(github.ref, 'refs/heads/upgrade/v3.8.5-preserve-admin')
+    # Start this workflow from rebuild/v3.8.5-rbac in the Actions UI.
+    if: startsWith(github.ref, 'refs/heads/rebuild/v3.8.5-rbac')
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -34,17 +34,17 @@ jobs:
           ref: ${{ github.ref }}
           fetch-depth: 1
 
-      - name: Fetch official baseline and target tags
+      - name: Fetch official v3.8.5 and original admin source
         run: |
           set -euo pipefail
+          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
           git fetch --no-tags https://github.com/MHSanaei/3x-ui.git \
-            refs/tags/v3.6.0:refs/tags/port-base-v3.6.0 \
             refs/tags/v3.8.5:refs/tags/port-target-v3.8.5
-          git show -s --format='%H %s' refs/tags/port-base-v3.6.0
+          git show -s --format='%H %s' refs/remotes/origin/main
           git show -s --format='%H %s' refs/tags/port-target-v3.8.5
 
-      - name: Prepare three-way migration candidate
-        run: python3 tools/port-v3.8.5.py
+      - name: Rebuild from clean official tree and port RBAC
+        run: python3 tools/rebuild-v3.8.5-rbac.py
 
       - name: Commit candidate for review
         run: |
@@ -56,7 +56,7 @@ jobs:
             echo "No changes to commit."
           else
             git commit -m "Port admin fork onto upstream v3.8.5"
-            git push origin HEAD:upgrade/v3.8.5-preserve-admin
+            git push origin HEAD:rebuild/v3.8.5-rbac
           fi
 
       - name: Set up Go
@@ -92,7 +92,7 @@ jobs:
             echo "Frontend lockfile is already synchronized."
           else
             git commit -m "Sync frontend dependency lockfile for v3.8.5"
-            git push origin HEAD:upgrade/v3.8.5-preserve-admin
+            git push origin HEAD:rebuild/v3.8.5-rbac
           fi
 
       - name: Check installer shell syntax
@@ -159,7 +159,7 @@ jobs:
             echo "Offline bundle did not change."
           else
             git commit -m "Refresh offline bundle for v3.8.5"
-            git push origin HEAD:upgrade/v3.8.5-preserve-admin
+            git push origin HEAD:rebuild/v3.8.5-rbac
           fi
 
       - name: Upload migration and build artifacts
