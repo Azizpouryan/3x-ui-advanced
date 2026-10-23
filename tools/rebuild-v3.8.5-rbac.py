@@ -211,107 +211,53 @@ def patch_web(dst):
         "func (s *Server) initRouter() (*gin.Engine, error) {\n\tsession.SetPermissionResolver(service.PermissionsForRole)\n\tservice.ReloadRoleCache()\n", "permission resolver initialization")
 
 def patch_access(dst):
-    # Use official v3.8.5's ClientRecord + ClientInbound tables for row-level
-    # scope checks. The older fork's ClientService helper methods are not part
-    # of v3.8.5, so calling them would make the Go build fail.
+    # Use v3.8.5's database models for scope checks instead of methods that only
+    # exist in the older fork. Every record and every attachment must be in scope.
     dst = replace_once(
         dst,
         '\t"github.com/mhsanaei/3x-ui/v3/internal/database/model"\n',
         '\t"github.com/mhsanaei/3x-ui/v3/internal/database"\n\t"github.com/mhsanaei/3x-ui/v3/internal/database/model"\n',
         "database import for scope checks",
     )
-    old_filter = """\tfor _, r := range rows {
-\t\tfor _, id := range r.InboundIds {
-\t\t\tif _, ok := set[id]; ok {
-\t\t\t\tout = append(out, r)
-\t\t\t\tbreak
-\t\t\t}
-\t\t}
-\t}"""
-    new_filter = """\tfor _, r := range rows {
-\t\tif len(r.InboundIds) == 0 {
+
+    f_start = dst.find("func filterClientsForRole(")
+    f_end = dst.find("// guardClientEmailScope", f_start)
+    if f_start < 0 or f_end < 0:
+        raise RuntimeError("Cannot locate client list scope helpers")
+    filter_func = """func filterClientsForRole(c *gin.Context, rows []service.ClientWithAttachments) []service.ClientWithAttachments {
+\tset, scoped := resellerAllowedSet(c)
+\tif !scoped {
+\t\treturn rows
+\t}
+\tout := make([]service.ClientWithAttachments, 0, len(rows))
+\tfor _, row := range rows {
+\t\tif len(row.InboundIds) == 0 {
 \t\t\tcontinue
 \t\t}
 \t\tallAllowed := true
-\t\tfor _, id := range r.InboundIds {
-\t\t\tif _, ok := set[id]; !ok {
+\t\tfor _, inboundID := range row.InboundIds {
+\t\t\tif _, ok := set[inboundID]; !ok {
 \t\t\t\tallAllowed = false
 \t\t\t\tbreak
 \t\t\t}
 \t\t}
 \t\tif allAllowed {
-\t\t\tout = append(out, r)
-\t\t}
-\t}"""
-    dst = replace_once(dst, old_filter, new_filter, "strict client-list scope")
-
-    old_guards = """// guardClientEmailScope aborts with 403 when the logged-in reseller tries to
-// act on a client that is not attached to any of their allowed inbounds.
-// No-op for non-reseller roles. Returns true to continue handling.
-func guardClientEmailScope(c *gin.Context, svc *service.ClientService, email string) bool {
-\tset, isReseller := resellerAllowedSet(c)
-\tif !isReseller {
-\t\treturn true
-\t}
-\tids, err := svc.GetInboundIdsForEmail(nil, email)
-\tif err == nil && len(ids) > 0 {
-\t\tallAllowed := true
-\t\tfor _, id := range ids {
-\t\t\tif _, ok := set[id]; !ok {
-\t\t\t\tallAllowed = false
-\t\t\t\tbreak
-\t\t\t}
-\t\t}
-\t\tif allAllowed {
-\t\t\treturn true
+\t\t\tout = append(out, row)
 \t\t}
 \t}
-\tpureJsonMsg(c, http.StatusForbidden, false, "forbidden: client is outside your reseller scope")
-\tc.Abort()
-\treturn false
+\treturn out
 }
 
-// guardClientSubIdScope aborts with 403 when the logged-in reseller asks for a
-// subscription id whose clients live outside their allowed inbounds. The links
-// behind a subId embed the client's credentials, so this is the same class of
-// check as guardClientEmailScope — just keyed by subId, which is what the
-// subscription endpoints address clients by. No-op for non-scoped roles.
-func guardClientSubIdScope(c *gin.Context, svc *service.ClientService, subId string) bool {
-\tset, isReseller := resellerAllowedSet(c)
-\tif !isReseller {
-\t\treturn true
-\t}
-\tids, err := svc.GetInboundIdsForSubId(nil, subId)
-\tif err == nil && len(ids) > 0 {
-\t\tallAllowed := true
-\t\tfor _, id := range ids {
-\t\t\tif _, ok := set[id]; !ok {
-\t\t\t\tallAllowed = false
-\t\t\t\tbreak
-\t\t\t}
-\t\t}
-\t\tif allAllowed {
-\t\t\treturn true
-\t\t}
-\t}
-\tpureJsonMsg(c, http.StatusForbidden, false, "forbidden: subscription is outside your reseller scope")
-\tc.Abort()
-\treturn false
-}
-
-"""
-    new_guards = """// scopeAllowsClientRecords returns true only if every matching record is
-// attached to at least one inbound and every attachment belongs to this role's
-// allowed inbound set. Empty associations and database errors fail closed.
+// scopeAllowsClientRecords requires at least one inbound association per client
+// and rejects the entire record if any attachment is outside the allowed set.
 func scopeAllowsClientRecords(set map[int]struct{}, records []model.ClientRecord) bool {
 \tif len(records) == 0 {
 \t\treturn false
 \t}
 \tfor _, record := range records {
 \t\tvar ids []int
-\t\terr := database.GetDB().Model(&model.ClientInbound{}).
-\t\t\tWhere("client_id = ?", record.Id).Pluck("inbound_id", &ids).Error
-\t\tif err != nil || len(ids) == 0 {
+\t\tif err := database.GetDB().Model(&model.ClientInbound{}).
+\t\t\tWhere("client_id = ?", record.Id).Pluck("inbound_id", &ids).Error; err != nil || len(ids) == 0 {
 \t\t\treturn false
 \t\t}
 \t\tfor _, id := range ids {
@@ -323,11 +269,16 @@ func scopeAllowsClientRecords(set map[int]struct{}, records []model.ClientRecord
 \treturn true
 }
 
-// guardClientEmailScope uses the official database association model. Every
-// inbound attached to this client must be within the scoped admin's allowlist.
-func guardClientEmailScope(c *gin.Context, _ *service.ClientService, email string) bool {
-\tset, isScoped := resellerAllowedSet(c)
-\tif !isScoped {
+"""
+    dst = dst[:f_start] + filter_func + dst[f_end:]
+
+    e_start = dst.find("func guardClientEmailScope(")
+    e_end = dst.find("// guardInboundIdsScope", e_start)
+    if e_start < 0 or e_end < 0:
+        raise RuntimeError("Cannot locate client detail scope guards")
+    guards = """func guardClientEmailScope(c *gin.Context, _ *service.ClientService, email string) bool {
+\tset, scoped := resellerAllowedSet(c)
+\tif !scoped {
 \t\treturn true
 \t}
 \tvar records []model.ClientRecord
@@ -340,11 +291,10 @@ func guardClientEmailScope(c *gin.Context, _ *service.ClientService, email strin
 \treturn false
 }
 
-// guardClientSubIdScope verifies all records sharing a subscription ID. This is
-// important because one sub link may represent multiple client attachments.
+// guardClientSubIdScope validates every client record sharing a subscription id.
 func guardClientSubIdScope(c *gin.Context, _ *service.ClientService, subId string) bool {
-\tset, isScoped := resellerAllowedSet(c)
-\tif !isScoped {
+\tset, scoped := resellerAllowedSet(c)
+\tif !scoped {
 \t\treturn true
 \t}
 \tvar records []model.ClientRecord
@@ -357,8 +307,10 @@ func guardClientSubIdScope(c *gin.Context, _ *service.ClientService, subId strin
 \treturn false
 }
 
+// 
 """
-    return replace_once(dst, old_guards, new_guards, "official-model client scope guards")
+    return dst[:e_start] + guards + dst[e_end:]
+
 
 
 
