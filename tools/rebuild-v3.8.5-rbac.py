@@ -94,7 +94,6 @@ func scopedRouteDenied(method, path string) bool {
         "/panel/api/admin", "/panel/api/roles", "/panel/api/server",
         "/panel/api/setting", "/panel/api/xray", "/panel/api/nodes",
         "/panel/api/hosts", "/panel/api/plans", "/panel/api/shop",
-        "/panel/api/reseller",
     } { if strings.HasPrefix(path, prefix) { return true } }
     if strings.Contains(path, "/groups") { return true }
     if strings.HasPrefix(path, "/panel/api/inbounds") { return !isReadRoute(method, path) }
@@ -297,7 +296,7 @@ def patch_dist(dst):
         '\t"github.com/mhsanaei/3x-ui/v3/internal/web/session"\n\t"github.com/mhsanaei/3x-ui/v3/internal/web/service"\n',
         "RBAC service import in SPA bootstrap",
     )
-    marker = "\t\tscript += §;window.X_UI_DB_TYPE=§ + config.GetDBKind() + §§\n"
+    marker = "\\t\\tscript += §;window.X_UI_DB_TYPE=\\"§ + config.GetDBKind() + §\\"§\\n"
     marker = marker.replace("§", chr(96))
     addition = marker + """
 \t\trole := model.RoleSuperAdmin
