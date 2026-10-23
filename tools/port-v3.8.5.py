@@ -226,6 +226,12 @@ def redirect_fork_release_urls(output_root: Path) -> int:
 
 
 def main() -> None:
+    # Once a migration candidate and its report exist, later workflow runs are
+    # validation runs. Do not merge an already-ported tree a second time.
+    if (ROOT / "PORTING_REPORT_v3.8.5.md").exists():
+        print("Existing migration report found; keeping the current candidate unchanged.")
+        return
+
     for ref in (BASE_REF, TARGET_REF):
         run(["git", "rev-parse", "--verify", ref])
 
