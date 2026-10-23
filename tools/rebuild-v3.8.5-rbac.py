@@ -611,13 +611,21 @@ def patch_frontend(root):
             "const AdminsPage = lazy(() => import('@/pages/admins/AdminsPage'));\n"
             "const ResellerDashboardPage = lazy(() => import('@/pages/reseller/ResellerDashboardPage'));\n", "admin frontend imports")
         routes = replace_once(routes, "const routes: RouteObject[] = [",
-            '''function AdminsRoute() {
+            '''function IndexRoute() {
+  const scoped = typeof window !== 'undefined' && Array.isArray(window.X_UI_PERMS) && window.X_UI_PERMS.includes('inbounds.scoped');
+  if (scoped) return <Navigate to="/usage" replace />;
+  return withSuspense(<IndexPage />);
+}
+
+function AdminsRoute() {
   const role = (typeof window !== 'undefined' && window.X_UI_ROLE) || 'super_admin';
   if (role !== 'super_admin') return <Navigate to="/" replace />;
   return withSuspense(<AdminsPage />);
 }
 
 const routes: RouteObject[] = [''', "admin UI guard")
+        routes = replace_once(routes, "{ index: true, element: withSuspense(<IndexPage />) },",
+            "{ index: true, element: <IndexRoute /> },", "scoped dashboard redirect")
         routes = replace_once(routes, "{ path: 'api-docs', element: withSuspense(<ApiDocsPage />) },",
             "{ path: 'api-docs', element: withSuspense(<ApiDocsPage />) },\n"
             "      { path: 'admins', element: <AdminsRoute /> },\n"
@@ -633,6 +641,22 @@ const routes: RouteObject[] = [''', "admin UI guard")
             "      { key: '/api-docs', icon: 'apidocs', title: t('menu.apiDocs') },\n"
             "      { key: '/admins', icon: 'admins', title: t('menu.admins') },\n"
             "      { key: '/usage', icon: 'usage', title: t('menu.usage') },", "sidebar items")
+        sidebar = replace_once(
+            sidebar,
+            "  const navItems = useMemo(() => tabs.filter((tab) => tab.icon !== 'logout'), [tabs]);",
+            """  const role = (typeof window !== 'undefined' && window.X_UI_ROLE) || 'super_admin';
+  const scoped = typeof window !== 'undefined' && Array.isArray(window.X_UI_PERMS) && window.X_UI_PERMS.includes('inbounds.scoped');
+  const navItems = useMemo(
+    () => tabs.filter((tab) => {
+      if (tab.icon === 'logout') return false;
+      if (tab.key === '/admins') return role === 'super_admin';
+      if (tab.key === '/usage') return scoped;
+      return true;
+    }),
+    [tabs, role, scoped],
+  );""",
+            "role-aware sidebar entries",
+        )
         sp.write_text(sidebar, encoding="utf-8", newline=""); count += 1
     return count
 
