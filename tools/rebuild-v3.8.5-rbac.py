@@ -18,7 +18,7 @@ RBAC_FILES = [
     "frontend/src/pages/admins/RolesCard.tsx", "frontend/src/pages/reseller/ResellerDashboardPage.tsx",
     "frontend/src/pages/reseller/ResellerDashboardPage.css", "frontend/src/test/permissions.test.ts",
 ]
-KEEP_FILES = ["tools/port-v3.8.5.py", "tools/rebuild-v3.8.5-rbac.py"]
+KEEP_FILES = ["tools/port-v3.8.5.py", "tools/rebuild-v3.8.5-rbac.py", "internal/web/middleware/rbac_test.go"]
 MIDDLEWARE = r'''package middleware
 
 import (
