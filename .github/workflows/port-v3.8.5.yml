@@ -10,6 +10,9 @@ on:
       - tools/port-v3.8.5.py
       - frontend/src/pages/api-docs/endpoints.ts
       - frontend/src/**
+      - internal/**
+      - go.mod
+      - go.sum
 
 permissions:
   contents: write
