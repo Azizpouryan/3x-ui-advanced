@@ -636,13 +636,19 @@ function AdminsRoute() {
   return withSuspense(<AdminsPage />);
 }
 
-const routes: RouteObject[] = [''', "admin UI guard")
+function ResellerRoute() {
+  const scoped = typeof window !== 'undefined' && Array.isArray(window.X_UI_PERMS) && window.X_UI_PERMS.includes('inbounds.scoped');
+  if (!scoped) return <Navigate to="/" replace />;
+  return withSuspense(<ResellerDashboardPage />);
+}
+
+const routes: RouteObject[] = ['', "admin UI guard")
         routes = replace_once(routes, "{ index: true, element: withSuspense(<IndexPage />) },",
             "{ index: true, element: <IndexRoute /> },", "scoped dashboard redirect")
         routes = replace_once(routes, "{ path: 'api-docs', element: withSuspense(<ApiDocsPage />) },",
             "{ path: 'api-docs', element: withSuspense(<ApiDocsPage />) },\n"
             "      { path: 'admins', element: <AdminsRoute /> },\n"
-            "      { path: 'usage', element: withSuspense(<ResellerDashboardPage />) },", "admin routes")
+            "      { path: 'usage', element: <ResellerRoute /> },", "admin routes")
         rp.write_text(routes, encoding="utf-8", newline=""); count += 1
     sp = root / "frontend/src/layouts/AppSidebar.tsx"
     sidebar = sp.read_text(encoding="utf-8")
@@ -658,15 +664,32 @@ const routes: RouteObject[] = [''', "admin UI guard")
             sidebar,
             "  const navItems = useMemo(() => tabs.filter((tab) => tab.icon !== 'logout'), [tabs]);",
             """  const role = (typeof window !== 'undefined' && window.X_UI_ROLE) || 'super_admin';
-  const scoped = typeof window !== 'undefined' && Array.isArray(window.X_UI_PERMS) && window.X_UI_PERMS.includes('inbounds.scoped');
+  const permissionKey = typeof window !== 'undefined' && Array.isArray(window.X_UI_PERMS)
+    ? window.X_UI_PERMS.join(',')
+    : '';
+  const permissions = new Set(permissionKey.split(',').filter(Boolean));
+  const scoped = permissions.has('inbounds.scoped');
   const navItems = useMemo(
     () => tabs.filter((tab) => {
       if (tab.icon === 'logout') return false;
       if (tab.key === '/admins') return role === 'super_admin';
       if (tab.key === '/usage') return scoped;
-      return true;
+      if (scoped && tab.key === '/groups') return false;
+      const required: Record<string, string> = {
+        '/inbounds': 'inbounds.view',
+        '/clients': 'clients.view',
+        '/groups': 'groups.manage',
+        '/nodes': 'nodes.manage',
+        '/hosts': 'hosts.manage',
+        '/settings': 'settings.manage',
+        '/xray': 'xray.manage',
+        '/outbound': 'xray.manage',
+        '/routing': 'xray.manage',
+      };
+      const perm = required[tab.key];
+      return !perm || permissions.has(perm);
     }),
-    [tabs, role, scoped],
+    [tabs, role, scoped, permissionKey],
   );""",
             "role-aware sidebar entries",
         )
