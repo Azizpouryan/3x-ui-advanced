@@ -73,8 +73,7 @@ func requiredPermission(method, path string) string {
         if isReadRoute(method, path) { return model.PermClientsView }; return model.PermClientsManage
     case strings.HasPrefix(path, "/panel/api/reseller"): return ""
     default:
-        if method != http.MethodGet && method != http.MethodHead && method != http.MethodOptions { return model.PermSettingsManage }
-        return ""
+        return "__unmapped_route__"
     }
 }
 
@@ -212,6 +211,125 @@ def patch_web(dst):
     return replace_once(dst, "func (s *Server) initRouter() (*gin.Engine, error) {\n",
         "func (s *Server) initRouter() (*gin.Engine, error) {\n\tsession.SetPermissionResolver(service.PermissionsForRole)\n\tservice.ReloadRoleCache()\n", "permission resolver initialization")
 
+def patch_access(dst):
+    old = """\tfor _, r := range rows {
+\t\tfor _, id := range r.InboundIds {
+\t\t\tif _, ok := set[id]; ok {
+\t\t\t\tout = append(out, r)
+\t\t\t\tbreak
+\t\t\t}
+\t\t}
+\t}"""
+    new = """\tfor _, r := range rows {
+\t\tif len(r.InboundIds) == 0 {
+\t\t\tcontinue
+\t\t}
+\t\tallAllowed := true
+\t\tfor _, id := range r.InboundIds {
+\t\t\tif _, ok := set[id]; !ok {
+\t\t\t\tallAllowed = false
+\t\t\t\tbreak
+\t\t\t}
+\t\t}
+\t\tif allAllowed {
+\t\t\tout = append(out, r)
+\t\t}
+\t}"""
+    dst = replace_once(dst, old, new, "strict client-list scope")
+
+    old_email = """\tids, err := svc.GetInboundIdsForEmail(nil, email)
+\tif err == nil {
+\t\tfor _, id := range ids {
+\t\t\tif _, ok := set[id]; ok {
+\t\t\t\treturn true
+\t\t\t}
+\t\t}
+\t}"""
+    new_email = """\tids, err := svc.GetInboundIdsForEmail(nil, email)
+\tif err == nil && len(ids) > 0 {
+\t\tallAllowed := true
+\t\tfor _, id := range ids {
+\t\t\tif _, ok := set[id]; !ok {
+\t\t\t\tallAllowed = false
+\t\t\t\tbreak
+\t\t\t}
+\t\t}
+\t\tif allAllowed {
+\t\t\treturn true
+\t\t}
+\t}"""
+    dst = replace_once(dst, old_email, new_email, "strict client-email scope")
+
+    old_sub = """\tids, err := svc.GetInboundIdsForSubId(nil, subId)
+\tif err == nil {
+\t\tfor _, id := range ids {
+\t\t\tif _, ok := set[id]; ok {
+\t\t\t\treturn true
+\t\t\t}
+\t\t}
+\t}"""
+    new_sub = """\tids, err := svc.GetInboundIdsForSubId(nil, subId)
+\tif err == nil && len(ids) > 0 {
+\t\tallAllowed := true
+\t\tfor _, id := range ids {
+\t\t\tif _, ok := set[id]; !ok {
+\t\t\t\tallAllowed = false
+\t\t\t\tbreak
+\t\t\t}
+\t\t}
+\t\tif allAllowed {
+\t\t\treturn true
+\t\t}
+\t}"""
+    return replace_once(dst, old_sub, new_sub, "strict subscription scope")
+
+
+def patch_dist(dst):
+    dst = replace_once(
+        dst,
+        '\t"github.com/mhsanaei/3x-ui/v3/internal/config"\n',
+        '\t"github.com/mhsanaei/3x-ui/v3/internal/config"\n\t"github.com/mhsanaei/3x-ui/v3/internal/database/model"\n',
+        "RBAC model import in SPA bootstrap",
+    )
+    dst = replace_once(
+        dst,
+        '\t"github.com/mhsanaei/3x-ui/v3/internal/web/session"\n',
+        '\t"github.com/mhsanaei/3x-ui/v3/internal/web/session"\n\t"github.com/mhsanaei/3x-ui/v3/internal/web/service"\n',
+        "RBAC service import in SPA bootstrap",
+    )
+    marker = "\t\tscript += §;window.X_UI_DB_TYPE=§ + config.GetDBKind() + §§\n"
+    marker = marker.replace("§", chr(96))
+    addition = marker + """
+\t\trole := model.RoleSuperAdmin
+\t\tif u := session.GetLoginUser(c); u != nil && u.Role != "" {
+\t\t\trole = u.Role
+\t\t}
+\t\tscript += §;window.X_UI_ROLE="§ + jsEscape.Replace(role) + §"§
+\t\tscript += §;window.X_UI_ROLE_NAME="§ + jsEscape.Replace(service.RoleDisplayName(role)) + §"§
+\t\tperms := session.PermissionsOf(&model.User{Role: role})
+\t\tgranted := make([]string, 0, len(model.AllPermissions))
+\t\tfor _, p := range model.AllPermissions {
+\t\t\tif perms[p] {
+\t\t\t\tgranted = append(granted, §"§+jsEscape.Replace(p)+§"§)
+\t\t\t}
+\t\t}
+\t\tscript += §;window.X_UI_PERMS=[§ + strings.Join(granted, ",") + §]§
+""".replace("§", chr(96))
+    return replace_once(dst, marker, addition, "inject role and permission globals")
+
+
+def patch_env(dst):
+    return replace_once(
+        dst,
+        "  X_UI_DB_TYPE?: string;\n",
+        "  X_UI_DB_TYPE?: string;\n"
+        "  X_UI_ROLE?: string;\n"
+        "  X_UI_ROLE_NAME?: string;\n"
+        "  X_UI_PERMS?: string[];\n",
+        "frontend RBAC window types",
+    )
+
+
 def patch_inbounds(dst):
     dst = replace_once(dst, 'g.GET("/get/:id", a.getInbound)', 'g.GET("/get/:id", scopeInboundParam, a.getInbound)', "inbound detail scope")
     dst = replace_once(dst, 'g.GET("/:id/fallbacks", a.getFallbacks)', 'g.GET("/:id/fallbacks", scopeInboundParam, a.getFallbacks)', "fallback read scope")
@@ -279,7 +397,7 @@ def rewrite_installer(root):
     return count
 
 def merge_locales(srcroot, outroot):
-    srcbase = srcroot / "frontend/src/i18n"; dstbase = outroot / "frontend/src/i18n"
+    srcbase = srcroot / "internal/web/translation"; dstbase = outroot / "internal/web/translation"
     if not srcbase.exists() or not dstbase.exists(): return 0
     count = 0
     def merge(base, extra):
@@ -364,6 +482,12 @@ def main():
         ap.write_text(patch_api(ap.read_text(encoding="utf-8")), encoding="utf-8", newline="")
         wp = output / "internal/web/web.go"
         wp.write_text(patch_web(wp.read_text(encoding="utf-8")), encoding="utf-8", newline="")
+        distp = output / "internal/web/controller/dist.go"
+        distp.write_text(patch_dist(distp.read_text(encoding="utf-8")), encoding="utf-8", newline="")
+        envp = output / "frontend/src/env.d.ts"
+        envp.write_text(patch_env(envp.read_text(encoding="utf-8")), encoding="utf-8", newline="")
+        accessp = output / "internal/web/controller/access.go"
+        accessp.write_text(patch_access(accessp.read_text(encoding="utf-8")), encoding="utf-8", newline="")
         ip = output / "internal/web/controller/inbound.go"
         ip.write_text(patch_inbounds(ip.read_text(encoding="utf-8")), encoding="utf-8", newline="")
         cp = output / "internal/web/controller/client.go"
