@@ -102,8 +102,6 @@ func scopedRouteDenied(method, path string) bool {
             "/panel/api/inbounds/list": {"GET": true},
             "/panel/api/inbounds/list/slim": {"GET": true},
             "/panel/api/inbounds/options": {"GET": true},
-            "/panel/api/inbounds/get/:id": {"GET": true},
-            "/panel/api/inbounds/:id/fallbacks": {"GET": true},
         }
         if methods, ok := allowed[path]; !ok || !methods[method] { return true }
     }
@@ -509,6 +507,12 @@ def patch_client_paging(dst):
 
 
 def patch_inbounds(dst):
+    dst = replace_once(
+        dst,
+        "\tinbounds, err := a.inboundService.GetInbounds(user.Id)",
+        "\tvar inbounds []*model.Inbound\n\tvar err error\n\tif session.IsScoped(c) {\n\t\tinbounds, err = a.inboundService.GetInboundsSlim(user.Id)\n\t} else {\n\t\tinbounds, err = a.inboundService.GetInbounds(user.Id)\n\t}",
+        "scoped inbound list redaction",
+    )
     dst = replace_once(dst, 'g.GET("/get/:id", a.getInbound)', 'g.GET("/get/:id", scopeInboundParam, a.getInbound)', "inbound detail scope")
     dst = replace_once(dst, 'g.GET("/:id/fallbacks", a.getFallbacks)', 'g.GET("/:id/fallbacks", scopeInboundParam, a.getFallbacks)', "fallback read scope")
     dst = replace_once(dst, 'g.POST("/:id/fallbacks", a.setFallbacks)', 'g.POST("/:id/fallbacks", scopeInboundParam, a.setFallbacks)', "fallback write scope")
