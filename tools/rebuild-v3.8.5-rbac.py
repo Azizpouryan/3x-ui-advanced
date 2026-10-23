@@ -693,8 +693,17 @@ def patch_frontend(root):
             "const ResellerDashboardPage = lazy(() => import('@/pages/reseller/ResellerDashboardPage'));\n", "admin frontend imports")
         routes = replace_once(routes, "const routes: RouteObject[] = [",
             '''function IndexRoute() {
-  const scoped = typeof window !== 'undefined' && Array.isArray(window.X_UI_PERMS) && window.X_UI_PERMS.includes('inbounds.scoped');
-  if (scoped) return <Navigate to="/usage" replace />;
+  const role = (typeof window !== 'undefined' && window.X_UI_ROLE) || 'super_admin';
+  const permissions = new Set(
+    typeof window !== 'undefined' && Array.isArray(window.X_UI_PERMS) ? window.X_UI_PERMS : [],
+  );
+  if (permissions.has('inbounds.scoped')) return <Navigate to="/usage" replace />;
+  // The system dashboard calls server-wide status, update, and settings APIs.
+  // Roles that do not have those permissions should land on an allowed page
+  // instead of rendering a dashboard full of expected 403 responses.
+  if (role !== 'super_admin' && !permissions.has('settings.manage') && !permissions.has('xray.manage')) {
+    return <Navigate to={permissions.has('inbounds.view') ? '/inbounds' : '/clients'} replace />;
+  }
   return withSuspense(<IndexPage />);
 }
 
