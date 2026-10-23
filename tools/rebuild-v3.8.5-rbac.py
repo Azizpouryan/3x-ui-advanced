@@ -19,7 +19,7 @@ RBAC_FILES = [
     "frontend/src/pages/admins/RolesCard.tsx", "frontend/src/pages/reseller/ResellerDashboardPage.tsx",
     "frontend/src/pages/reseller/ResellerDashboardPage.css", "frontend/src/test/permissions.test.ts",
 ]
-KEEP_FILES = ["tools/port-v3.8.5.py", "tools/rebuild-v3.8.5-rbac.py", "internal/web/middleware/rbac_test.go"]
+KEEP_FILES = ["tools/port-v3.8.5.py", "tools/rebuild-v3.8.5-rbac.py", "internal/web/middleware/rbac_test.go", "internal/web/service/panel/user_disabled_test.go"]
 MIDDLEWARE = r'''package middleware
 
 import (
@@ -229,7 +229,35 @@ def patch_session(src, dst):
     if '"strings"' not in dst[:dst.find(")\n\n")]:
         dst = replace_once(dst, '\t"time"\n', '\t"strings"\n\t"time"\n', "session strings import")
     block_text = block(src, "// HasRole reports whether the currently logged-in user", "func sessionUserID(obj any) (int, bool) {")
-    return replace_once(dst, "func sessionUserID(obj any) (int, bool) {", block_text + "func sessionUserID(obj any) (int, bool) {", "session RBAC helpers")
+    dst = replace_once(dst, "func sessionUserID(obj any) (int, bool) {", block_text + "func sessionUserID(obj any) (int, bool) {", "session RBAC helpers")
+    return replace_once(
+        dst,
+        "\tif !sessionEpochMatches(s.Get(loginEpochKey), user.LoginEpoch) {",
+        "\tif user.Disabled {\n\t\ts.Delete(loginUserKey)\n\t\ts.Delete(loginEpochKey)\n\t\tif saveErr := s.Save(); saveErr != nil {\n\t\t\tlogger.Warning(\"session: failed to drop disabled user:\", saveErr)\n\t\t}\n\t\treturn nil\n\t}\n\tif !sessionEpochMatches(s.Get(loginEpochKey), user.LoginEpoch) {",
+        "reject disabled accounts in existing sessions",
+    )
+
+
+def patch_user_service(dst):
+    marker = "\tif !crypto.CheckPasswordHash(user.Password, password) {"
+    addition = "\tif user.Disabled {\n\t\treturn nil, errors.New(\"invalid credentials\")\n\t}\n\n" + marker
+    return replace_once(dst, marker, addition, "reject disabled account during login")
+
+
+def patch_admin_service(dst):
+    dst = replace_once(
+        dst,
+        '\t\tUpdate("disabled", !enabled).Error; err != nil {',
+        '\t\tUpdates(map[string]any{\n\t\t\t"disabled": !enabled,\n\t\t\t"login_epoch": gorm.Expr("login_epoch + 1"),\n\t\t}).Error; err != nil {',
+        "invalidate sessions when toggling admin enabled state",
+    )
+    return replace_once(
+        dst,
+        '\t\tUpdate("password", hashed).Error; err != nil {',
+        '\t\tUpdates(map[string]any{\n\t\t\t"password": hashed,\n\t\t\t"login_epoch": gorm.Expr("login_epoch + 1"),\n\t\t}).Error; err != nil {',
+        "invalidate sessions after admin password reset",
+    )
+
 
 
 def patch_base(src, dst):
@@ -812,6 +840,10 @@ def main():
         basep.write_text(patch_base((source / "internal/web/controller/base.go").read_text(encoding="utf-8"),
                                     basep.read_text(encoding="utf-8")), encoding="utf-8", newline="")
         copied.append("internal/web/controller/base.go")
+        userp = output / "internal/web/service/panel/user.go"
+        userp.write_text(patch_user_service(userp.read_text(encoding="utf-8")), encoding="utf-8", newline="")
+        adminp = output / "internal/web/service/admin.go"
+        adminp.write_text(patch_admin_service(adminp.read_text(encoding="utf-8")), encoding="utf-8", newline="")
 
         mp = output / "internal/database/model/model.go"
         mp.write_text(patch_model((source / "internal/database/model/model.go").read_text(encoding="utf-8"),
