@@ -210,6 +210,30 @@ def patch_web(dst):
     return replace_once(dst, "func (s *Server) initRouter() (*gin.Engine, error) {\n",
         "func (s *Server) initRouter() (*gin.Engine, error) {\n\tsession.SetPermissionResolver(service.PermissionsForRole)\n\tservice.ReloadRoleCache()\n", "permission resolver initialization")
 
+def patch_session(src, dst):
+    # Keep the v3.8.5 auth/session implementation intact and transplant only
+    # the RBAC helpers added by the fork.
+    if '"strings"' not in dst[:dst.find(")\n\n")]:
+        dst = replace_once(dst, '\t"time"\n', '\t"strings"\n\t"time"\n', "session strings import")
+    block_text = block(src, "// HasRole reports whether the currently logged-in user", "func sessionUserID(obj any) (int, bool) {")
+    return replace_once(dst, "func sessionUserID(obj any) (int, bool) {", block_text + "func sessionUserID(obj any) (int, bool) {", "session RBAC helpers")
+
+
+def patch_base(src, dst):
+    # Preserve upstream login behaviour; insert only permission middleware helpers.
+    if '"strings"' not in dst[:dst.find(")\n\n")]:
+        dst = replace_once(dst, '\t"net/http"\n', '\t"net/http"\n\t"strings"\n', "base strings import")
+    if '"github.com/mhsanaei/3x-ui/v3/internal/database/model"' not in dst:
+        dst = replace_once(
+            dst,
+            '\t"github.com/mhsanaei/3x-ui/v3/internal/logger"\n',
+            '\t"github.com/mhsanaei/3x-ui/v3/internal/database/model"\n\t"github.com/mhsanaei/3x-ui/v3/internal/logger"\n',
+            "base RBAC model import",
+        )
+    block_text = block(src, "// requireRole returns a Gin middleware", "// I18nWeb retrieves an internationalized message")
+    return replace_once(dst, "// I18nWeb retrieves an internationalized message", block_text + "// I18nWeb retrieves an internationalized message", "base RBAC helpers")
+
+
 def patch_access(dst):
     # Use v3.8.5's database models for scope checks instead of methods that only
     # exist in the older fork. Every record and every attachment must be in scope.
@@ -500,8 +524,15 @@ def main():
         copied = []
         for rel in RBAC_FILES:
             if copy_item(source / rel, rel, output): copied.append(rel)
-        for rel in ("internal/web/session/session.go", "internal/web/controller/base.go"):
-            copy_item(source / rel, rel, output); copied.append(rel)
+
+        sessp = output / "internal/web/session/session.go"
+        sessp.write_text(patch_session((source / "internal/web/session/session.go").read_text(encoding="utf-8"),
+                                       sessp.read_text(encoding="utf-8")), encoding="utf-8", newline="")
+        copied.append("internal/web/session/session.go")
+        basep = output / "internal/web/controller/base.go"
+        basep.write_text(patch_base((source / "internal/web/controller/base.go").read_text(encoding="utf-8"),
+                                    basep.read_text(encoding="utf-8")), encoding="utf-8", newline="")
+        copied.append("internal/web/controller/base.go")
 
         mp = output / "internal/database/model/model.go"
         mp.write_text(patch_model((source / "internal/database/model/model.go").read_text(encoding="utf-8"),
