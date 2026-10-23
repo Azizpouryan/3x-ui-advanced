@@ -248,6 +248,7 @@ def main() -> None:
         clean_merges = 0
         conflict_hunks = 0
         conflict_paths: list[str] = []
+        merge_failures: list[str] = []
         current_selected = 0
         upstream_selected = 0
         custom_paths = 0
@@ -319,7 +320,25 @@ def main() -> None:
                 upstream_selected += 1
                 continue
 
-            merged, conflicts = merge_text(relative, current, base, target, temp_root)
+            try:
+                merged, conflicts = merge_text(relative, current, base, target, temp_root)
+            except RuntimeError as error:
+                # Some workflow/config files can make git's external merge helper fail
+                # without a useful diagnostic. Fall back explicitly and report the file
+                # instead of aborting the complete migration.
+                merge_failures.append(relative + ": " + str(error))
+                conflict_paths.append(relative)
+                if relative == ".github/workflows/release.yml":
+                    # The v3.8.5 release workflow is required to build the migrated
+                    # binary and publish architecture assets from this fork.
+                    copy_path(target_path, relative, output_root)
+                    upstream_selected += 1
+                else:
+                    # Prefer the current side for other files to avoid losing RBAC.
+                    copy_path(current_path, relative, output_root)
+                    current_selected += 1
+                continue
+
             write_bytes(relative, merged, output_root, current_path)
             if conflicts:
                 conflict_hunks += conflicts
@@ -353,7 +372,8 @@ def main() -> None:
             "Upstream files: " + str(len(target_files)),
             "Clean merges: " + str(clean_merges),
             "Conflict hunks resolved toward the admin fork: " + str(conflict_hunks),
-            "Files containing conflict hunks: " + str(len(set(conflict_paths))),
+            "Files containing conflict hunks or merge fallbacks: " + str(len(set(conflict_paths))),
+            "Files where git merge-file failed and a side was selected: " + str(len(merge_failures)),
             "Current-side files selected: " + str(current_selected),
             "Upstream-side files selected: " + str(upstream_selected),
             "Fork-only paths preserved: " + str(custom_paths),
@@ -367,6 +387,9 @@ def main() -> None:
             report.extend("- " + path for path in sorted(set(conflict_paths)))
         else:
             report.append("No conflicting text hunks were detected.")
+        if merge_failures:
+            report += ["", "Merge helper errors and selected fallbacks", "------------------------------------------"]
+            report.extend("- " + item for item in merge_failures)
         report += [
             "",
             "This is a migration candidate, not a guarantee that every bug is fixed. Run the Go tests, frontend build, and installer shell checks before deploying it. Review RBAC and database migrations especially carefully.",
