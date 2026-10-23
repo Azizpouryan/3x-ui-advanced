@@ -7,6 +7,7 @@ on:
       - upgrade/v3.8.5-preserve-admin
     paths:
       - .github/workflows/port-v3.8.5.yml
+      - tools/port-v3.8.5.py
 
 permissions:
   contents: write
