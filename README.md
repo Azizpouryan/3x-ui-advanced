@@ -4,6 +4,9 @@
 
 A customized fork of [MHSanaei/3X-UI](https://github.com/MHSanaei/3x-ui) — an advanced, open-source web panel for managing [Xray-core](https://github.com/XTLS/Xray-core) servers — extended with a built-in **multi-admin RBAC system**, **reseller scoping**, and a **fully offline installer** for air-gapped or restricted servers.
 
+> [!WARNING]
+> **Migration status: NOT READY FOR INSTALLATION.** The v3.8.5 candidate currently passes the frontend build and shell syntax checks, but `go test ./...` fails because the current RBAC fork and v3.8.5 backend models/controllers are not yet consistently integrated. The installer intentionally refuses to use an older `latest` release. Do not install this branch on a production server.
+
 > [!IMPORTANT]
 > This project is intended for personal use only. Please do not use it for illegal purposes or in a production environment.
 
