@@ -2,6 +2,11 @@ name: Port admin fork to upstream v3.8.5
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - upgrade/v3.8.5-preserve-admin
+    paths:
+      - .github/workflows/port-v3.8.5.yml
 
 permissions:
   contents: write
