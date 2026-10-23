@@ -74,14 +74,14 @@ func (t *Tgbot) BuildClientDraftMessage(draft *clientDraft) string {
 	}
 
 	var b strings.Builder
-	b.WriteString("📝 *New client draft*\r\n")
-	b.WriteString(fmt.Sprintf("📧 Email: `%s`\r\n", client_Email))
-	b.WriteString(fmt.Sprintf("🔗 Attached: %s\r\n", attached))
-	b.WriteString(fmt.Sprintf("📊 Traffic: %s\r\n", traffic))
-	b.WriteString(fmt.Sprintf("📅 Expire: %s\r\n", expiry))
-	b.WriteString(fmt.Sprintf("🔢 IP limit: %s\r\n", ipLimit))
-	b.WriteString(fmt.Sprintf("👤 TG user: %s\r\n", tgID))
-	b.WriteString(fmt.Sprintf("💬 Comment: %s\r\n", comment))
+	b.WriteString("📝 <b>New client draft</b>\r\n")
+	fmt.Fprintf(&b, "📧 Email: <code>%s</code>\r\n", html.EscapeString(draft.email))
+	fmt.Fprintf(&b, "🔗 Attached: %s\r\n", html.EscapeString(attached))
+	fmt.Fprintf(&b, "📊 Traffic: %s\r\n", traffic)
+	fmt.Fprintf(&b, "📅 Expire: %s\r\n", expiry)
+	fmt.Fprintf(&b, "🔢 IP limit: %s\r\n", ipLimit)
+	fmt.Fprintf(&b, "👤 TG user: %s\r\n", html.EscapeString(tgID))
+	fmt.Fprintf(&b, "💬 Comment: %s\r\n", html.EscapeString(comment))
 	return b.String()
 }
 
@@ -217,7 +217,6 @@ func (t *Tgbot) buildSubscriptionURLs(email string) (string, string, error) {
 		}
 		subJsonURL = fmt.Sprintf("%s%s", subJsonURI, client.SubID)
 	} else {
-
 		subJsonURL = fmt.Sprintf("%s://%s%s%s", scheme, host, subJsonPath, client.SubID)
 	}
 
@@ -259,7 +258,7 @@ func (t *Tgbot) sendClientIndividualLinks(chatId int64, email string) {
 	}
 
 	// Try to fetch raw subscription links. Prefer plain text response.
-	req, err := http.NewRequest("GET", subURL, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, subURL, nil)
 	if err != nil {
 		t.SendMsgToTgbot(chatId, t.I18nBot("tgbot.answers.errorOperation")+"\r\n"+err.Error())
 		return
@@ -377,7 +376,7 @@ func (t *Tgbot) sendClientQRLinks(chatId int64, email string) {
 
 	// Also generate a few individual links' QRs (first up to 5)
 	subPageURL := subURL
-	req, err := http.NewRequest("GET", subPageURL, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, subPageURL, nil)
 	if err == nil {
 		req.Header.Set("Accept", "text/plain, */*;q=0.1")
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -498,8 +497,8 @@ func (t *Tgbot) clientInfoMsg(
 
 	status := t.I18nBot("tgbot.offline")
 	isOnline := false
-	if service.XrayProcess().IsRunning() {
-		if slices.Contains(service.XrayProcess().GetOnlineClients(), traffic.Email) {
+	if process := service.XrayProcess(); process != nil && process.IsRunning() {
+		if slices.Contains(process.GetOnlineClients(), traffic.Email) {
 			status = t.I18nBot("tgbot.online")
 			isOnline = true
 		}

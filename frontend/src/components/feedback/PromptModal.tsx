@@ -77,7 +77,12 @@ export default function PromptModal({
         <JsonEditor value={value} onChange={setValue} minHeight="240px" maxHeight="60vh" />
       ) : type === 'textarea' ? (
         <Input.TextArea
-          ref={(el) => { textareaRef.current = (el as unknown as { resizableTextArea?: { textArea: HTMLTextAreaElement } })?.resizableTextArea?.textArea ?? null; }}
+          ref={(el) => {
+            textareaRef.current =
+              (el as unknown as { resizableTextArea?: { textArea: HTMLTextAreaElement } })
+                ?.resizableTextArea?.textArea ?? null;
+          }}
+          aria-label={title}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           autoSize={{ minRows: 10, maxRows: 20 }}
@@ -86,6 +91,7 @@ export default function PromptModal({
       ) : (
         <Input
           ref={inputRef}
+          aria-label={title}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeydown}

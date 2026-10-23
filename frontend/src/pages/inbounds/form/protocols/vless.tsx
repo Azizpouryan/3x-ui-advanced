@@ -1,41 +1,66 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button, Form, Input, InputNumber, Space, Typography } from 'antd';
+import { Button, Form, Input, InputNumber, Select, Space, Typography } from 'antd';
+import { Controller, useFormContext } from 'react-hook-form';
+
+import { FormField } from '@/components/form/rhf';
+import { VLESS_AUTH_LABEL_KEYS, type VlessAuthKind } from '@/lib/xray/vless-encryption';
 
 interface VlessFieldsProps {
   saving: boolean;
   selectedVlessAuth: string;
+  vlessAuthKind: VlessAuthKind | null;
   network: string;
   security: string;
-  getNewVlessEnc: (kind: 'x25519' | 'mlkem768') => void;
+  getNewVlessEnc: (kind: VlessAuthKind) => void;
   clearVlessEnc: () => void;
 }
 
 export default function VlessFields({
   saving,
   selectedVlessAuth,
+  vlessAuthKind,
   network,
   security,
   getNewVlessEnc,
   clearVlessEnc,
 }: VlessFieldsProps) {
   const { t } = useTranslation();
+  const { control } = useFormContext();
+  const [authKind, setAuthKind] = useState<VlessAuthKind>(vlessAuthKind ?? 'x25519');
+
+  const [syncedAuthKind, setSyncedAuthKind] = useState(vlessAuthKind);
+  if (vlessAuthKind !== syncedAuthKind) {
+    setSyncedAuthKind(vlessAuthKind);
+    setAuthKind(vlessAuthKind ?? 'x25519');
+  }
+
+  const authOptions = (Object.entries(VLESS_AUTH_LABEL_KEYS) as [VlessAuthKind, string][]).map(
+    ([value, labelKey]) => ({ value, label: t(labelKey) }),
+  );
+
   return (
     <>
-      <Form.Item name={['settings', 'decryption']} label={t('pages.inbounds.decryption')}>
+      <FormField name={['settings', 'decryption']} label={t('pages.inbounds.decryption')}>
         <Input />
-      </Form.Item>
-      <Form.Item name={['settings', 'encryption']} label={t('pages.inbounds.encryption')}>
+      </FormField>
+      <FormField name={['settings', 'encryption']} label={t('pages.inbounds.encryption')}>
         <Input />
-      </Form.Item>
-      <Form.Item label=" ">
+      </FormField>
+      <Form.Item label={t('pages.inbounds.vlessAuthGenerate')}>
         <Space size={8} wrap>
-          <Button type="primary" loading={saving} onClick={() => getNewVlessEnc('x25519')}>
-            {t('pages.inbounds.vlessAuthX25519')}
+          <Select
+            value={authKind}
+            onChange={(v) => setAuthKind(v)}
+            options={authOptions}
+            style={{ width: 240 }}
+          />
+          <Button type="primary" loading={saving} onClick={() => getNewVlessEnc(authKind)}>
+            {t('pages.inbounds.vlessAuthGenerateButton')}
           </Button>
-          <Button type="primary" loading={saving} onClick={() => getNewVlessEnc('mlkem768')}>
-            {t('pages.inbounds.vlessAuthMlkem768')}
+          <Button danger onClick={clearVlessEnc}>
+            {t('clear')}
           </Button>
-          <Button danger onClick={clearVlessEnc}>{t('clear')}</Button>
         </Space>
         <Typography.Text type="secondary" className="vless-auth-state">
           {t('pages.inbounds.vlessAuthSelected', { auth: selectedVlessAuth })}
@@ -48,9 +73,22 @@ export default function VlessFields({
         >
           <Space.Compact block>
             {[900, 500, 900, 256].map((def, i) => (
-              <Form.Item key={i} name={['settings', 'testseed', i]} noStyle initialValue={def}>
-                <InputNumber min={1} style={{ width: '25%' }} />
-              </Form.Item>
+              <Controller
+                key={i}
+                control={control}
+                name={`settings.testseed.${i}`}
+                defaultValue={def}
+                render={({ field }) => (
+                  <InputNumber
+                    min={1}
+                    style={{ width: '25%' }}
+                    value={field.value as number}
+                    onChange={field.onChange}
+                    onBlur={field.onBlur}
+                    ref={field.ref}
+                  />
+                )}
+              />
             ))}
           </Space.Compact>
         </Form.Item>

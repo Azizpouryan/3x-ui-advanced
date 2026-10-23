@@ -81,6 +81,7 @@ export const HttpOutboundFormSettingsSchema = z.object({
   port: PortSchema.default(8080),
   user: z.string().default(''),
   pass: z.string().default(''),
+  headers: z.record(z.string(), z.string()).default({}),
 });
 export type HttpOutboundFormSettings = z.infer<typeof HttpOutboundFormSettingsSchema>;
 
@@ -226,11 +227,13 @@ export const OutboundStreamFormSchema =
   NetworkSettingsSchema.and(SecuritySettingsSchema).and(StreamExtrasSchema);
 export type OutboundStreamFormValues = z.infer<typeof OutboundStreamFormSchema>;
 
-// Top-level form base: identity (tag, sendThrough), then the per-protocol
-// settings DU, then the stream sub-form, then mux.
+// Top-level form base: identity (tag, sendThrough, targetStrategy), then
+// the per-protocol settings DU, then the stream sub-form, then mux.
+// targetStrategy '' means AsIs (omitted from wire).
 export const OutboundFormBaseSchema = z.object({
   tag: z.string().default(''),
   sendThrough: z.string().default(''),
+  targetStrategy: z.union([OutboundDomainStrategySchema, z.literal('')]).default(''),
   streamSettings: OutboundStreamFormSchema.optional(),
   mux: MuxFormSchema.default({
     enabled: false,

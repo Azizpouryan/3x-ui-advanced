@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
@@ -216,6 +217,7 @@ func (s *InboundService) buildTargetClientFromSource(source model.Client, target
 	target.Password = ""
 	target.Auth = ""
 	target.Flow = ""
+	target.Secret = ""
 
 	targetProtocol := targetInbound.Protocol
 	switch targetProtocol {
@@ -232,6 +234,11 @@ func (s *InboundService) buildTargetClientFromSource(source model.Client, target
 		target.Password = s.generateRandomCredential(targetProtocol)
 	case model.Hysteria:
 		target.Auth = s.generateRandomCredential(targetProtocol)
+	case model.MTProto:
+		target.Secret = model.GenerateFakeTLSSecret(mtprotoDomainFromSettings(targetInbound.Settings))
+	case model.TUIC:
+		target.ID = uuid.NewString()
+		target.Password = s.generateRandomCredential(targetProtocol)
 	default:
 		target.ID = s.generateRandomCredential(targetProtocol)
 	}
@@ -416,16 +423,12 @@ func (s *InboundService) GetClientInboundByEmail(email string) (traffic *xray.Cl
 		}
 	}
 	if err == nil && inbound != nil && !s.inboundHasClientEmail(inbound, email) {
-		// The pointed-at inbound still exists but no longer carries this
-		// client: it was moved. client_traffics.inbound_id is a legacy
-		// single-inbound pointer that a move does not update, so the lookup
-		// searched the old inbound and failed with "client not found in
-		// inbound for email" — which is what breaks the bot's link and QR for
-		// a config the buyer can plainly see. Re-resolve through the
-		// authoritative client_inbounds link.
-		moved, idErr := s.clientService.GetInboundIdsForEmail(db, email)
+		// The pointed-at inbound still exists but no longer carries the client —
+		// the client was moved to another inbound (#6059). Resolve through the
+		// client_inbounds link to the inbound that actually hosts it now.
+		ids, idErr := s.clientService.GetInboundIdsForEmail(db, email)
 		if idErr == nil {
-			for _, id := range moved {
+			for _, id := range ids {
 				if id == inbound.Id {
 					continue
 				}
@@ -437,6 +440,19 @@ func (s *InboundService) GetClientInboundByEmail(email string) (traffic *xray.Cl
 		}
 	}
 	return traffic, inbound, err
+}
+
+func (s *InboundService) inboundHasClientEmail(inbound *model.Inbound, email string) bool {
+	clients, err := s.GetClients(inbound)
+	if err != nil {
+		return false
+	}
+	for _, client := range clients {
+		if client.Email == email {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *InboundService) GetClientByEmail(clientEmail string) (*xray.ClientTraffic, *model.Client, error) {
@@ -481,85 +497,4 @@ func (s *InboundService) EmailsByInbound(inboundId int) ([]string, error) {
 		}
 	}
 	return emails, nil
-}
-
-// depletedTrafficClause matches traffic rows whose client has ended: quota
-// exhausted or expiry date passed. Rows flagged for auto-renew (reset != 0)
-// are excluded — they are scheduled to come back, not finished.
-const depletedTrafficClause = "reset = 0 and ((total > 0 and up + down >= total) or (expiry_time > 0 and expiry_time <= ?))"
-
-// DepletedEmailsByInbound returns the emails on an inbound whose client has
-// ended — expiry date passed or traffic quota exhausted. This is the same
-// "depleted" definition the inbounds list uses for its per-inbound counter,
-// so what the UI reports as ended is exactly what this deletes. Used by the
-// "delete expired clients" row action, which feeds the list into
-// ClientService.BulkDelete.
-func (s *InboundService) DepletedEmailsByInbound(inboundId int) ([]string, error) {
-	emails, err := s.EmailsByInbound(inboundId)
-	if err != nil {
-		return nil, err
-	}
-	if len(emails) == 0 {
-		return nil, nil
-	}
-
-	// Traffic rows are keyed on email but their casing can drift from the
-	// settings JSON, so match case-insensitively and return the settings
-	// spelling — that is what BulkDelete rewrites settings.clients[] against.
-	lowered := make([]string, 0, len(emails))
-	for _, e := range emails {
-		lowered = append(lowered, strings.ToLower(e))
-	}
-
-	db := database.GetDB()
-	now := time.Now().UnixMilli()
-	depleted := make(map[string]struct{}, len(emails))
-	for _, batch := range chunkStrings(lowered, sqlInChunk) {
-		var rows []xray.ClientTraffic
-		if err := db.Model(xray.ClientTraffic{}).
-			Where("LOWER(email) IN ?", batch).
-			Where(depletedTrafficClause, now).
-			Find(&rows).Error; err != nil {
-			return nil, err
-		}
-		for _, r := range rows {
-			if r.Email != "" {
-				depleted[strings.ToLower(r.Email)] = struct{}{}
-			}
-		}
-	}
-	if len(depleted) == 0 {
-		return nil, nil
-	}
-
-	result := make([]string, 0, len(depleted))
-	seen := make(map[string]struct{}, len(depleted))
-	for _, e := range emails {
-		key := strings.ToLower(e)
-		if _, ok := depleted[key]; !ok {
-			continue
-		}
-		if _, dup := seen[key]; dup {
-			continue
-		}
-		seen[key] = struct{}{}
-		result = append(result, e)
-	}
-	return result, nil
-}
-
-// inboundHasClientEmail reports whether an inbound's settings actually list
-// this client, which is what makes the traffic row's inbound pointer
-// trustworthy.
-func (s *InboundService) inboundHasClientEmail(inbound *model.Inbound, email string) bool {
-	clients, err := s.GetClients(inbound)
-	if err != nil {
-		return false
-	}
-	for _, client := range clients {
-		if client.Email == email {
-			return true
-		}
-	}
-	return false
 }

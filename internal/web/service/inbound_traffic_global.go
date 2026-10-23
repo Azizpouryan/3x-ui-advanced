@@ -100,15 +100,15 @@ func chunkGlobalRows(rows []model.ClientGlobalTraffic, size int) [][]model.Clien
 }
 
 // overlayGlobalTraffic raises Up/Down on the given rows to the largest global
-// value any master pushed for that email. Read-path only — callers hand it
-// rows about to be serialized for display; the stored counters are untouched.
+// value any master still pushing for that email reported. Read-path only —
+// callers hand it rows about to be serialized for display; the stored counters
+// are untouched. Rows older than globalTrafficFreshWindow are ignored: they
+// come from a master that stopped pushing, and folding their frozen counters
+// in would keep showing usage the client no longer has (#6113).
 func overlayGlobalTraffic(db *gorm.DB, rows []*xray.ClientTraffic) {
 	if len(rows) == 0 {
 		return
 	}
-	// Rows older than globalTrafficFreshWindow come from a master that stopped
-	// pushing; folding their frozen counters in would keep showing usage the
-	// client no longer has.
 	freshSince := globalTrafficFreshSince()
 	// Cheap short-circuit for the common case (a panel no master pushes to).
 	var probe int64

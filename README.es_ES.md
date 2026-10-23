@@ -1,107 +1,131 @@
 [English](/README.md) | [فارسی](/README.fa_IR.md) | [العربية](/README.ar_EG.md) | [中文](/README.zh_CN.md) | [Español](/README.es_ES.md) | [Русский](/README.ru_RU.md) | [Türkçe](/README.tr_TR.md)
 
-# 3X-UI — Fork con RBAC (admin6501)
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./media/3x-ui-dark.png">
+    <img alt="3x-ui" src="./media/3x-ui-light.png">
+  </picture>
+</p>
 
-Un fork personalizado de [MHSanaei/3X-UI](https://github.com/MHSanaei/3x-ui) — un panel web avanzado y de código abierto para gestionar servidores [Xray-core](https://github.com/XTLS/Xray-core) — ampliado con un **sistema multi-administrador basado en roles (RBAC)**, **alcance para revendedores (Reseller)** y un **instalador totalmente sin conexión** para servidores aislados o restringidos.
+<p align="center">
+  <a href="https://github.com/MHSanaei/3x-ui/releases"><img src="https://img.shields.io/github/v/release/mhsanaei/3x-ui" alt="Release"></a>
+  <a href="https://github.com/MHSanaei/3x-ui/actions"><img src="https://img.shields.io/github/actions/workflow/status/mhsanaei/3x-ui/release.yml.svg" alt="Build"></a>
+  <a href="#"><img src="https://img.shields.io/github/go-mod/go-version/mhsanaei/3x-ui.svg" alt="GO Version"></a>
+  <a href="https://github.com/MHSanaei/3x-ui/releases/latest"><img src="https://img.shields.io/github/downloads/mhsanaei/3x-ui/total.svg" alt="Downloads"></a>
+  <a href="https://www.gnu.org/licenses/gpl-3.0.en.html"><img src="https://img.shields.io/badge/license-GPL%20V3-blue.svg?longCache=true" alt="License"></a>
+  <a href="https://pkg.go.dev/github.com/mhsanaei/3x-ui/v3"><img src="https://pkg.go.dev/badge/github.com/mhsanaei/3x-ui/v3.svg" alt="Go Reference"></a>
+  <a href="https://docs.sanaei.dev"><img src="https://img.shields.io/badge/docs-docs.sanaei.dev-22d3ee" alt="Documentation"></a>
+</p>
+
+**3X-UI** es un panel de control web avanzado y de código abierto para gestionar servidores [Xray-core](https://github.com/XTLS/Xray-core). Ofrece una interfaz limpia y multilingüe para desplegar, configurar y monitorear una amplia gama de protocolos de proxy y VPN — desde un único VPS hasta despliegues multinodo.
+
+Construido como un fork mejorado del proyecto X-UI original, 3X-UI añade un soporte de protocolos más amplio, mayor estabilidad, contabilidad de tráfico por cliente y muchas funciones que mejoran la experiencia de uso.
 
 > [!IMPORTANT]
-> Este proyecto es solo para uso personal. No lo utilices con fines ilegales ni en un entorno de producción.
+> Este proyecto está destinado únicamente al uso personal. Por favor, no lo uses para fines ilegales ni en un entorno de producción.
 
-## Qué añade este fork
+## Características
 
-- **Control de acceso basado en roles (RBAC)** — gestiona varios administradores del panel desde la página **Administradores**, cada uno con uno de cuatro roles:
-  - `super_admin` — acceso total a todo (el primer administrador / predeterminado).
-  - `manager` — gestiona entradas y clientes; **sin** ajustes del panel, plantilla de Xray ni gestión de administradores.
-  - `reseller` (revendedor) — limitado solo a las entradas asignadas; gestiona sus propios clientes y **visualiza** sus entradas en solo lectura (no puede añadir/editar/activar-desactivar/eliminar entradas).
-  - `readonly` — puede ver todo pero no realizar ninguna acción de escritura.
-- **Registro de auditoría (Audit Log)** — cada acción de administrador (crear/editar/eliminar administrador, restablecer contraseña, …) se registra con actor, objetivo y marca de tiempo.
-- **Paquete de instalación sin conexión** — instala en un servidor sin internet mediante un tarball autónomo (binario del panel + Xray-core + datos geo). Ver [`offline/`](offline/).
-- **Comprobador de actualizaciones del fork** — la opción "buscar actualización" del panel lee las versiones de este fork (`admin6501/3x-ui`).
-- **Migración segura a PostgreSQL** — la migración SQLite → PostgreSQL copia todos los datos RBAC (administradores, roles, entradas permitidas, registros de auditoría).
-
-## Asignación de tráfico por revendedor (reseller)
-
-Da a cada **revendedor** un presupuesto total de tráfico y deja que el panel lo aplique automáticamente:
-
-- Define una **cuota de tráfico** por revendedor (en GB) en la página **Admins** — `0` significa ilimitado.
-- El consumo se mide como la **suma de subida + bajada de todas las entradas asignadas a ese revendedor**.
-- Cuando un revendedor alcanza su cuota, la tarea de tráfico **desactiva automáticamente todas sus entradas asignadas**, cortando al instante a sus clientes.
-- Las entradas desactivadas de este modo se registran y se **reactivan automáticamente** en cuanto subes o restableces la cuota del revendedor.
-- Se **permite la sobreventa** — solo cuenta el consumo real — y cada revendedor ve su consumo frente a su cuota en el panel de revendedor.
-
-## Funciones principales (de 3X-UI)
-
-- **Entradas multiprotocolo** — VLESS, VMess, Trojan, Shadowsocks, WireGuard, Hysteria2, HTTP, SOCKS (Mixed), Dokodemo-door / Tunnel y TUN.
+- **Entradas multiprotocolo** — VLESS, VMess, Trojan, Shadowsocks, WireGuard, AmneziaWG, TUIC v5, Hysteria2, MTProto, HTTP, SOCKS (Mixed), Dokodemo-door / Tunnel y TUN.
 - **Transportes y seguridad modernos** — TCP (Raw), mKCP, WebSocket, gRPC, HTTPUpgrade y XHTTP, protegidos con TLS, XTLS y REALITY.
-- **Gestión por cliente** — cuotas de tráfico, fechas de expiración, límites de IP, estado en línea, enlaces de compartición, códigos QR y suscripciones.
-- **Soporte multinodo**, salidas y enrutamiento (WARP, reglas personalizadas, balanceadores de carga).
-- **Servidor de suscripción integrado** con [plantillas de página personalizadas](docs/custom-subscription-templates.md).
-- **Bot de Telegram**, **API RESTful** con Swagger integrado, **SQLite o PostgreSQL**, **13 idiomas de interfaz**, temas claro/oscuro y aplicación de límites de IP con **Fail2ban**.
+- **AmneziaWG integrado** — WireGuard resistente al DPI se ejecuta dentro del panel sobre una pila de red en espacio de usuario, sin módulo del kernel, DKMS ni paquetes adicionales que instalar.
+- **TUIC v5 integrado** — Proxy de alto rendimiento basado en QUIC con medición de tráfico mediante retransmisión UDP nativa, handshakes 0-RTT y control de congestión BBR.
+- **Proxies MTProto** — secretos FakeTLS, ad-tags y cuotas por cliente, aplicados en caliente sin cortar las conexiones existentes.
+- **Fallbacks** — sirve varios protocolos en un solo puerto (p. ej. VLESS y Trojan en el 443) usando la función de fallback de Xray.
+- **Gestión por cliente** — cuotas de tráfico, fechas de caducidad, límites de IP con exenciones para direcciones de confianza, límites de dispositivos (HWID), ciclos de renovación programados, estado en línea en tiempo real y enlaces de compartición, códigos QR y suscripciones con un solo clic.
+- **Estadísticas de tráfico** — por entrada, por cliente y por salida, con controles de reinicio.
+- **Soporte multinodo** — gestiona y escala a través de varios servidores desde un único panel, incluida la clonación de entradas en otros nodos.
+- **Salida y enrutamiento** — WARP, NordVPN, PIA, reglas de enrutamiento personalizadas, balanceadores de carga con conmutación por error entre balanceadores y encadenamiento de proxy de salida. Las categorías geosite y geoip incluidas se pueden explorar directamente desde el editor de reglas.
+- **Servidor de suscripción integrado** — salida raw, JSON y Clash, seleccionada automáticamente según el User-Agent del cliente, además de [plantillas de página personalizables](docs/custom-subscription-templates.md).
+- **Bots de Telegram y Discord** para monitorización y gestión remotas.
+- **API RESTful** con tokens de alcance limitado y caducidad opcional, y una referencia de la API dentro del panel.
+- **Panel instalable (PWA)** — ancla 3X-UI al escritorio o a la pantalla de inicio del móvil.
+- **Almacenamiento flexible** — SQLite (predeterminado) o PostgreSQL.
+- **13 idiomas de interfaz** con temas oscuro y claro.
+- **Integración con Fail2ban** para aplicar límites de IP por cliente.
 
-## Funciones y opciones del panel (este fork)
+## Capturas de pantalla
 
-Además de lo anterior, el panel también incluye:
+<details>
+<summary>Haz clic para expandir</summary>
 
-- **Planes / Paquetes** — plantillas de cliente reutilizables: rellena tráfico, caducidad y límite de IP con un clic.
-- **Grupos de clientes** — agrupa varias entradas para que una sola suscripción entregue varias configuraciones.
-- **Hosts** — publica endpoints de suscripción personalizados (dirección, puerto, remark, SNI) por entrada.
-- **Protocolo editable en la entrada** — cambia el protocolo de una entrada existente; sus clientes se conservan (correo, cuota, caducidad, id de suscripción) y solo se regeneran sus credenciales, tras avisar de que los enlaces ya compartidos dejarán de funcionar.
-- **Plantilla de Remark de suscripción** — crea los nombres de los enlaces con tokens `{{VAR}}` (`EMAIL`, `INBOUND`, `TRAFFIC_LEFT`, `DAYS_LEFT`, `HOST`, …); vaciar el campo restaura la plantilla por defecto.
-- **Formatos de suscripción adicionales** — salidas JSON y Clash (con reglas de enrutamiento opcionales) junto a la suscripción base64.
-- **Autenticación de dos factores (2FA / TOTP)** para el inicio de sesión de administradores.
-- **Inicio de sesión con LDAP / Active Directory** — autentica a los administradores contra un directorio.
-- **Notificaciones por correo (SMTP)** — alertas basadas en eventos con STARTTLS/TLS y botón de correo de prueba.
-- **Webhook de tráfico externo** — envía eventos de tráfico de clientes a una URL externa.
-- **Soporte de proxy MTProto (Telegram)** mediante el sidecar `mtg` incluido.
-- **Calendario Jalali (persa) / Gregoriano** conmutable para todas las fechas.
-- **Página de Tutoriales en el panel** (solo super_admin) — una guía rápida multilingüe de cada sección del panel.
-- **Límite de dispositivos (HWID)** — limita cuántos dispositivos pueden descargar la suscripción de un cliente mediante la cabecera `x-hwid` que envían apps tipo Happ/Hiddify. Valor por defecto del panel con anulación por cliente, lista de dispositivos que puedes vaciar y un modo estricto opcional que rechaza apps sin identificador.
-- **Eliminar clientes caducados** — limpia los clientes terminados de una entrada desde el menú de su fila, o deja que el panel los borre automáticamente pasados X días desde su caducidad (desactivado por defecto; 0 días no borra nunca).
-- **Marca de la página de suscripción** — construye desde el panel la página que tus usuarios abren en el navegador: nombre, lema, logotipo, aviso, colores, fondo, secciones visibles, botones de soporte/Telegram/web y CSS propio, con vista previa en vivo.
-- **Tienda de Telegram — monedero y pago por consumo** — el bot vende configuraciones a usuarios finales con un monedero prepago. El usuario recarga (el mínimo y el máximo por recarga los defines tú), opcionalmente debe unirse antes a un canal, y luego crea una configuración con el límite de tráfico que quiera en la entrada que elijas. **Se le cobra por lo que realmente consume**: fijas el precio por GB en el panel, y si compra 10 GB y usa 1 GB solo se le descuenta un gigabyte. Una cuota diaria opcional por configuración cubre la tarificación por tiempo. La medición corre cada pocos minutos; cuando un monedero se vacía las configuraciones de ese usuario se apagan y vuelven en cuanto recarga. Cada movimiento de dinero queda en un libro mayor. La página **Tienda de Telegram** muestra monederos, solicitudes de recarga, configuraciones y su coste en vivo, y permite abonar o cargar a mano.
-- **Roles personalizados** — crea tus propios roles en la página **Admins**: ponle nombre, marca los permisos que debe tener (ver/gestionar entradas, clientes, planes, grupos, hosts, nodos, ajustes del panel, configuración de Xray, gestión de admins) y asígnalo como cualquier rol integrado. Marca *restringir a las entradas asignadas* para que se comporte como un revendedor, cuotas incluidas. Un rol todavía asignado a un admin no se puede borrar.
-- **Panel del revendedor** — tras iniciar sesión, el revendedor llega a su propio panel: barras de cuota de tráfico y de plazas de cliente, recuento de clientes por estado (activos, en línea, por vencer, terminados), desglose por entrada, los clientes que vencen en los próximos siete días y los creados más recientemente.
-- **Desactivar un admin apaga sus entradas** — al desactivar una cuenta de revendedor también se apagan las entradas asignadas, de modo que sus clientes dejan de conectar, no solo su propio acceso. Reactivarla restaura exactamente lo que se apagó y nunca toca una entrada que desactivaste a mano.
-- **Seguridad reforzada** — protección CSRF, cabeceras de seguridad y duración de sesión configurable.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./media/01-overview-dark.png">
+  <img alt="Overview" src="./media/01-overview-light.png">
+</picture>
 
-## Inicio rápido (en línea)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./media/02-add-inbound-dark.png">
+  <img alt="Inbounds" src="./media/02-add-inbound-light.png">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./media/03-add-client-dark.png">
+  <img alt="Add client" src="./media/03-add-client-light.png">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./media/05-add-nodes-dark.png">
+  <img alt="Configs" src="./media/05-add-nodes-light.png">
+</picture>
+
+</details>
+
+## Inicio Rápido
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/admin6501/3x-ui/main/install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
 ```
 
-Durante la instalación se generan un usuario, una contraseña y una ruta web aleatorios. Luego ejecuta `x-ui` para abrir el menú de administración (iniciar/detener, restablecer credenciales, gestionar SSL, etc.).
-
-## Instalación sin conexión (sin internet)
-
-Para servidores sin acceso a internet — o donde la descarga de GitHub está bloqueada:
-
-1. Copia `offline/x-ui-linux-amd64.tar.gz` e `install_offline.sh` al servidor (cualquier carpeta).
-2. Ejecuta:
+Para instalar una versión específica, añade su etiqueta (p. ej. `v3.7.0`):
 
 ```bash
-chmod +x install_offline.sh
-sudo ./install_offline.sh                 # detecta automáticamente el .tar.gz del directorio actual
-# o pásalo explícitamente:
-sudo ./install_offline.sh /root/x-ui-linux-amd64.tar.gz
+bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) v3.7.0
 ```
 
-El instalador **no realiza ninguna llamada de red** para el paquete (binario + Xray + geo vienen del tarball), imprime las credenciales generadas **y el token de la API**, y al actualizar **conserva tu `/etc/x-ui/x-ui.db` existente** mientras ejecuta las migraciones (incluidas las tablas RBAC). Ver [`offline/README.md`](offline/README.md) para más detalles.
+Para instalar la versión **dev** continua (la última prelanzamiento por commit desde `main`, no una versión estable), pasa `dev-latest`:
 
-> El paquete sin conexión precompilado es **solo amd64 / x86_64**. Para otras arquitecturas, compila un paquete para esa arquitectura desde el código fuente.
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) dev-latest
+```
 
-## Plataformas compatibles
+Durante la instalación se generan un nombre de usuario, una contraseña y una ruta de acceso aleatorios. Tras la instalación, ejecuta `x-ui` para abrir el menú de gestión, donde puedes iniciar/detener el servicio, ver o restablecer tus credenciales de acceso, gestionar certificados SSL y mucho más.
 
-**Sistemas operativos:** Ubuntu, Debian, Armbian, Fedora, CentOS, RHEL, AlmaLinux, Rocky Linux, Oracle Linux, Amazon Linux, Arch, Manjaro, openSUSE, Alpine y Windows.
+Cada recurso de la publicación se publica con una suma `.sha256` junto a él. Tanto `install.sh` como el actualizador verifican el archivo contra esa suma y abortan si no coincide.
 
-**Arquitecturas:** `amd64` · `arm64` (aarch64) · `armv7` · `armv6` · `386` · `s390x`.
+Para la documentación completa —instalación, configuración, operación y la referencia completa de la API— visita **[docs.sanaei.dev](https://docs.sanaei.dev)**.
 
-## Base de datos
+### Instalación desatendida
 
-- **SQLite** (predeterminado) — un único archivo en `/etc/x-ui/x-ui.db`. Sin configuración, ideal para despliegues pequeños/medianos.
-- **PostgreSQL** — recomendado para gran número de clientes o configuraciones multinodo.
+El instalador también se ejecuta de forma **no interactiva** para cloud-init.
+Define `XUI_NONINTERACTIVE=1` (o canalízalo sin TTY) y realizará la instalación de principio a fin sin
+ninguna pregunta, generando credenciales aleatorias y escribiéndolas en
+`/etc/x-ui/install-result.env`. Consulta [`deploy/`](deploy/) para:
 
-Migrar una instalación SQLite existente a PostgreSQL (con todos los datos RBAC):
+- [User-data de cloud-init](deploy/cloud-init/) — instalación desatendida en cualquier nube (Hetzner/AWS/DO/Vultr/GCP/Azure/Oracle)
+- [Notas de Hetzner Cloud](deploy/marketplace/hetzner/) — despliegue basado en cloud-init en Hetzner
+
+## Plataformas Compatibles
+
+**Sistemas operativos:** Ubuntu, Debian, Armbian, Fedora, CentOS, RHEL, AlmaLinux, Rocky Linux, Oracle Linux, Amazon Linux, Virtuozzo, Arch, Manjaro, Parch, openSUSE (Tumbleweed / Leap), Alpine y Windows.
+
+**Arquitecturas:** `amd64` · `386` · `arm64` (aarch64) · `armv7` · `armv6` · `armv5` · `s390x`.
+
+## Opciones de Base de Datos
+
+3X-UI admite dos backends, que se eligen durante la instalación:
+
+- **SQLite** (predeterminado) — un único archivo en `/etc/x-ui/x-ui.db`. Sin configuración, ideal para despliegues pequeños y medianos.
+- **PostgreSQL** — recomendado para un gran número de clientes o configuraciones multinodo. El instalador puede instalar PostgreSQL localmente por ti, o aceptar un DSN a un servidor existente.
+
+En tiempo de ejecución, el backend se selecciona mediante variables de entorno (el instalador las escribe por ti en `/etc/default/x-ui`):
+
+```
+XUI_DB_TYPE=postgres
+XUI_DB_DSN=postgres://xui:password@127.0.0.1:5432/xui?sslmode=disable
+```
+
+### Migrar una instalación de SQLite existente a PostgreSQL
 
 ```bash
 x-ui migrate-db --dsn "postgres://xui:password@127.0.0.1:5432/xui?sslmode=disable"
@@ -109,32 +133,99 @@ x-ui migrate-db --dsn "postgres://xui:password@127.0.0.1:5432/xui?sslmode=disabl
 systemctl restart x-ui
 ```
 
-El archivo SQLite original permanece intacto; elimínalo una vez verificado el nuevo backend.
+El archivo SQLite de origen permanece intacto; elimínalo manualmente una vez que hayas verificado el nuevo backend.
 
-## Variables de entorno
+### Docker
+
+El comando predeterminado `docker compose up -d` sigue usando SQLite. Para ejecutarlo con el servicio PostgreSQL incluido, descomenta las dos líneas de variables de entorno `XUI_DB_*` en `docker-compose.yml` e inícialo con el perfil:
+
+```bash
+docker compose --profile postgres up -d
+```
+
+La imagen incluye Fail2ban (habilitado de forma predeterminada) para aplicar **límites de IP** por cliente. Fail2ban banea a los infractores con `iptables`, lo que requiere la capacidad `NET_ADMIN`. `docker-compose.yml` ya la concede mediante `cap_add`; si en su lugar inicias el contenedor con `docker run`, añade tú mismo las capacidades, de lo contrario los baneos se registran pero nunca se aplican:
+
+```bash
+docker run -d --cap-add=NET_ADMIN --cap-add=NET_RAW ... ghcr.io/mhsanaei/3x-ui
+```
+
+## Variables de Entorno
 
 | Variable | Descripción | Predeterminado |
 | --- | --- | --- |
 | `XUI_DB_TYPE` | Backend de base de datos: `sqlite` o `postgres` | `sqlite` |
-| `XUI_DB_DSN` | Cadena de conexión PostgreSQL (cuando `XUI_DB_TYPE=postgres`) | — |
+| `XUI_DB_DSN` | Cadena de conexión de PostgreSQL (cuando `XUI_DB_TYPE=postgres`) | — |
 | `XUI_DB_FOLDER` | Directorio del archivo de base de datos SQLite | `/etc/x-ui` |
-| `XUI_INIT_WEB_BASE_PATH` | Ruta URI inicial del panel web | `/` |
-| `XUI_ENABLE_FAIL2BAN` | Activar límites de IP mediante Fail2ban | `true` |
+| `XUI_DB_MAX_OPEN_CONNS` | Máximo de conexiones abiertas (pool de PostgreSQL) | — |
+| `XUI_DB_MAX_IDLE_CONNS` | Máximo de conexiones inactivas (pool de PostgreSQL) | — |
+| `XUI_INIT_WEB_BASE_PATH` | La ruta URI inicial para el panel web | `/` |
+| `XUI_ENABLE_FAIL2BAN` | Habilitar la aplicación de límites de IP basada en Fail2ban | `true` |
 | `XUI_LOG_LEVEL` | Nivel de registro (`debug`, `info`, `warning`, `error`) | `info` |
+| `XUI_DEBUG` | Habilitar el modo de depuración | `false` |
+| `XUI_TUNNEL_HEALTH_MONITOR` | Habilitar el monitor de salud del túnel (sondea una URL y reinicia xray tras fallos repetidos; un reinicio desconecta a todos los clientes) | `false` |
+| `XUI_TUNNEL_HEALTH_PROXY` | Proxy a través del cual se envía el sondeo; apúntalo a una entrada local de xray para que el sondeo pruebe el túnel (p. ej. `socks5://127.0.0.1:1080`). Vacío significa que el sondeo solo comprueba la conectividad del host | — |
+| `XUI_TUNNEL_HEALTH_URL` | URL sondeada para verificar la salud del túnel | `https://www.cloudflare.com/cdn-cgi/trace` |
+| `XUI_TUNNEL_HEALTH_INTERVAL` | Intervalo entre sondeos | `30s` |
+| `XUI_TUNNEL_HEALTH_TIMEOUT` | Tiempo de espera por sondeo | `10s` |
+| `XUI_TUNNEL_HEALTH_FAILURES` | Fallos consecutivos antes de que se active un reinicio | `3` |
+| `XUI_TUNNEL_HEALTH_COOLDOWN` | Retardo mínimo entre reinicios consecutivos | `5m` |
+| `NODE_TOKEN_ENCRYPTION` | Cifrado en reposo de los tokens de API de los nodos: `off`, `migration` o `required` (sin el prefijo `XUI_`) | `off` |
+| `XUI_NODE_TOKEN_KEY_FILE` | Llavero JSON (modo `0600`) con el id de la clave activa y sus claves de 32 bytes en base64 | `/etc/x-ui/node_token_key.json` |
+| `XUI_NODE_TOKEN_KEY` | Una única clave de 32 bytes en base64, usada solo si no se puede cargar el archivo de claves | — |
 
-## Idiomas compatibles
+La lista completa está en la [referencia de variables de entorno](https://docs.sanaei.dev/docs/reference/env-vars).
+
+## Idiomas Compatibles
 
 La interfaz del panel está disponible en 13 idiomas:
 
 English · فارسی · العربية · 中文（简体） · 中文（繁體） · Español · Русский · Українська · Türkçe · Tiếng Việt · 日本語 · Bahasa Indonesia · Português (Brasil)
 
-## Documentación
+## Contribuir
 
-- [Capturar la IP real del cliente](docs/real-client-ip.md) (tras Cloudflare / relés L4).
-- [Plantillas de suscripción personalizadas](docs/custom-subscription-templates.md).
+Las contribuciones son bienvenidas. Por favor, lee la [Guía de contribución](/CONTRIBUTING.md) antes de abrir una incidencia (issue) o una solicitud de incorporación (pull request).
 
-## Créditos y licencia
+## Un Agradecimiento Especial a
 
-Este proyecto es un fork de **[MHSanaei/3X-UI](https://github.com/MHSanaei/3x-ui)** y se basa en [Xray-core](https://github.com/XTLS/Xray-core) y el X-UI original de [alireza0](https://github.com/alireza0/). Reglas de enrutamiento geográfico: [Iran v2ray rules](https://github.com/chocolate4u/Iran-v2ray-rules) y [Russia v2ray rules](https://github.com/runetfreedom/russia-v2ray-rules-dat).
+- [alireza0](https://github.com/alireza0/)
 
-Licenciado bajo **GPL-3.0**, igual que el proyecto original.
+## Reconocimientos
+
+- [Iran v2ray rules](https://github.com/chocolate4u/Iran-v2ray-rules) (Licencia: **GPL-3.0**): _Reglas de enrutamiento mejoradas para v2ray/xray y v2ray/xray-clients con dominios iraníes incorporados y un enfoque en seguridad y bloqueo de anuncios._
+- [Russia v2ray rules](https://github.com/runetfreedom/russia-v2ray-rules-dat) (Licencia: **GPL-3.0**): _Este repositorio contiene reglas de enrutamiento V2Ray actualizadas automáticamente basadas en datos de dominios y direcciones bloqueadas en Rusia._
+
+## Herramientas de la Comunidad
+
+Herramientas e integraciones construidas por la comunidad alrededor de 3x-ui.
+
+- [terraform-provider-3x-ui](https://github.com/batonogov/terraform-provider-threexui) (Licencia: **MIT**): _Gestiona inbounds, clientes, configuración del panel y configuración de Xray como código con Terraform / OpenTofu._
+- [3X-UI Manager](https://github.com/yukh975/3X-UI-Manager) (Licencia: **MIT**): _Cliente nativo de Android para 3x-ui — panel de control, inbounds, clientes con compartición por QR, nodos y gestión de múltiples paneles. Disponible en F-Droid._
+
+## Apoyar el Proyecto
+
+**Si este proyecto te es útil, puedes darle una**:star2:
+
+<a href="https://www.buymeacoffee.com/MHSanaei" target="_blank">
+<img src="./media/default-yellow.png" alt="Buy Me A Coffee" style="height: 70px !important;width: 277px !important;" >
+</a>
+
+</br>
+<a href="https://nowpayments.io/donation/hsanaei" target="_blank" rel="noreferrer noopener">
+   <img src="./media/donation-button-black.svg" alt="Crypto donation button by NOWPayments">
+</a>
+
+## Historial de estrellas
+
+<a href="https://www.star-history.com/?repos=mhsanaei%2F3x-ui&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=mhsanaei/3x-ui&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=mhsanaei/3x-ui&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=mhsanaei/3x-ui&type=date&legend=top-left" />
+ </picture>
+</a>
+
+<p align="center">
+ <a href="https://www.star-history.com/mhsanaei/3x-ui">
+  <picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=rank&theme=dark" /><source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=rank" /><img alt="Star History Rank" src="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=rank" /></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=trending&theme=dark" /><source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=trending" /><img alt="GitHub Trending Repository of the Day" src="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=trending" /></picture>
+ </a>
+</p>

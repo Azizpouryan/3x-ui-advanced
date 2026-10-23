@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { isPanelUpdateAvailable } from '@/lib/panel-version';
+import { formatPanelVersion, isPanelUpdateAvailable } from '@/lib/panel-version';
 
 // Parity with web/service/panel.go isNewerVersion.
 describe('isPanelUpdateAvailable', () => {
@@ -36,5 +36,28 @@ describe('isPanelUpdateAvailable', () => {
     expect(isPanelUpdateAvailable('dev+1a2b3c4d', 'dev+1a2b3c4d')).toBe(false);
     expect(isPanelUpdateAvailable('v3.5.0', 'dev+1a2b3c4d')).toBe(false);
     expect(isPanelUpdateAvailable('dev+1a2b3c4d', '3.5.0')).toBe(false);
+  });
+});
+
+describe('formatPanelVersion', () => {
+  it('adds a single v prefix to bare semantic versions', () => {
+    expect(formatPanelVersion('3.4.0')).toBe('v3.4.0');
+    expect(formatPanelVersion('2.6.5')).toBe('v2.6.5');
+  });
+
+  it('does not double up the v on already-prefixed tags', () => {
+    expect(formatPanelVersion('v3.4.0')).toBe('v3.4.0');
+    expect(formatPanelVersion('V3.4.0')).toBe('v3.4.0');
+  });
+
+  it('shows dev builds verbatim without a v prefix', () => {
+    expect(formatPanelVersion('dev+1a2b3c4d')).toBe('dev+1a2b3c4d');
+    expect(formatPanelVersion('dev')).toBe('dev');
+  });
+
+  it('returns empty for blank input and leaves unknown markers untouched', () => {
+    expect(formatPanelVersion('')).toBe('');
+    expect(formatPanelVersion(undefined)).toBe('');
+    expect(formatPanelVersion('?')).toBe('?');
   });
 });

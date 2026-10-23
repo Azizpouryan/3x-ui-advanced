@@ -62,7 +62,6 @@ export type RowAction =
   | 'delete'
   | 'resetTraffic'
   | 'delAllClients'
-  | 'delDepletedClients'
   | 'clone';
 
 export type GeneralAction = 'import' | 'export' | 'subs' | 'resetInbounds';
@@ -85,5 +84,4 @@ export interface InboundListProps {
   onGeneralAction: (key: GeneralAction) => void;
   onRowAction: (action: { key: RowAction; dbInbound: DBInboundRecord }) => void;
   onBulkDelete: (ids: number[]) => Promise<boolean>;
-  readOnly?: boolean;
 }

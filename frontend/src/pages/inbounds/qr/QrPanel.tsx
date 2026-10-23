@@ -4,6 +4,7 @@ import { Button, QRCode, Tag, Tooltip, message } from 'antd';
 import { CopyOutlined, DownloadOutlined, PictureOutlined } from '@ant-design/icons';
 
 import { ClipboardManager, FileManager } from '@/utils';
+import { activateOnKey } from '@/utils/a11y';
 import './QrPanel.css';
 
 interface QrPanelProps {
@@ -37,7 +38,10 @@ async function svgToPngBlob(svgEl: SVGSVGElement | null, size: number): Promise<
       URL.revokeObjectURL(url);
       canvas.toBlob((blob) => resolve(blob), 'image/png');
     };
-    img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(null);
+    };
     img.src = url;
   });
 }
@@ -94,33 +98,54 @@ export default function QrPanel({
     <div className="qr-panel">
       {messageContextHolder}
       <div className="qr-panel-header">
-        <Tag color="green" className="qr-remark">{remark}</Tag>
+        <Tag color="green" className="qr-remark">
+          {remark}
+        </Tag>
         <Tooltip title={t('copy')}>
-          <Button size="small" icon={<CopyOutlined />} onClick={copy} />
+          <Button size="small" icon={<CopyOutlined />} aria-label={t('copy')} onClick={copy} />
         </Tooltip>
         {showQr && (
-          <Tooltip title={t('downloadImage') !== 'downloadImage' ? t('downloadImage') : 'Download Image'}>
-            <Button size="small" icon={<PictureOutlined />} onClick={downloadImage} />
+          <Tooltip title={t('downloadImage')}>
+            <Button
+              size="small"
+              icon={<PictureOutlined />}
+              aria-label={t('downloadImage')}
+              onClick={downloadImage}
+            />
           </Tooltip>
         )}
         {downloadName && (
           <Tooltip title={t('download')}>
-            <Button size="small" icon={<DownloadOutlined />} onClick={download} />
+            <Button
+              size="small"
+              icon={<DownloadOutlined />}
+              aria-label={t('download')}
+              onClick={download}
+            />
           </Tooltip>
         )}
       </div>
       {showQr && (
-        <div ref={qrRef} className="qr-panel-canvas">
+        <div
+          ref={qrRef}
+          className="qr-panel-canvas"
+          role="button"
+          tabIndex={0}
+          aria-label={t('copy')}
+          onClick={copyImage}
+          onKeyDown={(event) => activateOnKey(copyImage)(event)}
+        >
           <Tooltip title={t('copy')}>
             <QRCode
               className="qr-code"
               value={value}
               size={size}
+              errorLevel="L"
+              marginSize={2}
               type="svg"
               bordered={false}
               color="#000000"
               bgColor="#ffffff"
-              onClick={copyImage}
             />
           </Tooltip>
         </div>

@@ -37,11 +37,7 @@ func NewWebSocketService(hub *websocket.Hub) *WebSocketService {
 // HandleConnection takes ownership of an upgraded WebSocket connection:
 // registers a new client, starts the read/write pumps, and returns
 // immediately. The connection is closed when both pumps exit.
-//
-// scoped carries the session's RBAC scoping (reseller and friends) into the
-// hub so panel-wide payloads are never fanned out to a connection whose REST
-// view is filtered.
-func (s *WebSocketService) HandleConnection(conn *ws.Conn, remoteIP string, scoped bool) {
+func (s *WebSocketService) HandleConnection(conn *ws.Conn, remoteIP string) {
 	if s == nil || s.hub == nil || conn == nil {
 		if conn != nil {
 			conn.Close()
@@ -49,14 +45,9 @@ func (s *WebSocketService) HandleConnection(conn *ws.Conn, remoteIP string, scop
 		return
 	}
 
-	var client *websocket.Client
-	if scoped {
-		client = websocket.NewScopedClient(uuid.New().String())
-	} else {
-		client = websocket.NewClient(uuid.New().String())
-	}
+	client := websocket.NewClient(uuid.New().String())
 	s.hub.Register(client)
-	logger.Debugf("WebSocket client %s registered from %s (scoped=%t)", client.ID, remoteIP, scoped)
+	logger.Debugf("WebSocket client %s registered from %s", client.ID, remoteIP)
 
 	go s.writePump(client, conn)
 	go s.readPump(client, conn)
@@ -74,7 +65,7 @@ func (s *WebSocketService) readPump(client *websocket.Client, conn *ws.Conn) {
 	}()
 
 	conn.SetReadLimit(wsClientReadLimit)
-	conn.SetReadDeadline(time.Now().Add(wsPongWait))
+	_ = conn.SetReadDeadline(time.Now().Add(wsPongWait))
 	conn.SetPongHandler(func(string) error {
 		return conn.SetReadDeadline(time.Now().Add(wsPongWait))
 	})
@@ -103,9 +94,9 @@ func (s *WebSocketService) writePump(client *websocket.Client, conn *ws.Conn) {
 	for {
 		select {
 		case msg, ok := <-client.Send:
-			conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+			_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 			if !ok {
-				conn.WriteMessage(ws.CloseMessage, []byte{})
+				_ = conn.WriteMessage(ws.CloseMessage, []byte{})
 				return
 			}
 			if err := conn.WriteMessage(ws.TextMessage, msg); err != nil {
@@ -114,7 +105,7 @@ func (s *WebSocketService) writePump(client *websocket.Client, conn *ws.Conn) {
 			}
 
 		case <-ticker.C:
-			conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+			_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
 			if err := conn.WriteMessage(ws.PingMessage, nil); err != nil {
 				logger.Debugf("WebSocket ping error for client %s: %v", client.ID, err)
 				return

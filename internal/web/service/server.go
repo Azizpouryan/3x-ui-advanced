@@ -4,19 +4,25 @@ import (
 	"archive/zip"
 	"bufio"
 	"bytes"
+	"cmp"
+	"context"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"math"
 	"mime/multipart"
 	stdnet "net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -26,8 +32,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mhsanaei/3x-ui/v3/internal/amneziawg"
+	"github.com/mhsanaei/3x-ui/v3/internal/amneziawgnet"
 	"github.com/mhsanaei/3x-ui/v3/internal/config"
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
+	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/common"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/sys"
@@ -86,6 +95,13 @@ type Status struct {
 		ErrorMsg string       `json:"errorMsg"`
 		Version  string       `json:"version"`
 	} `json:"xray"`
+	// AmneziaWG gates the overview's AmneziaWG log view: Configured stays true
+	// while an inbound exists but its embedded interface isn't up yet, which
+	// is exactly when that view's event lines are worth reading.
+	AmneziaWG struct {
+		Configured bool `json:"configured"`
+		Running    bool `json:"running"`
+	} `json:"amneziawg"`
 	PanelVersion string    `json:"panelVersion"`
 	PanelGuid    string    `json:"panelGuid"`
 	Uptime       uint64    `json:"uptime"`
@@ -117,7 +133,10 @@ type Status struct {
 
 // Release represents information about a software release from GitHub.
 type Release struct {
-	TagName string `json:"tag_name"` // The tag name of the release
+	TagName         string `json:"tag_name"`         // The tag name of the release
+	Body            string `json:"body"`             // The release notes; the dev channel reads its commit from here
+	TargetCommitish string `json:"target_commitish"` // The branch/commit the tag points at
+	Prerelease      bool   `json:"prerelease"`       // Whether this is a pre-release
 }
 
 // ServerService provides business logic for server monitoring and management.
@@ -163,15 +182,15 @@ const xrayVersionsCacheTTL = 15 * time.Minute
 // callers from triggering arbitrary aggregation work and keeps the
 // frontend's bucket selector self-documenting.
 var allowedHistoryBuckets = map[int]bool{
-	2:    true, // Real-time view
-	30:   true, // 30s intervals
-	60:   true, // 1m intervals
-	120:  true, // 2m intervals
-	180:  true, // 3m intervals
-	300:  true, // 5m intervals
-	720:  true, // 12m intervals
-	1440: true, // 24m intervals
-	2880: true, // 48m intervals
+	2:     true, // 2m
+	30:    true, // 30m
+	60:    true, // 1h
+	180:   true, // 3h
+	360:   true, // 6h
+	720:   true, // 12h
+	1440:  true, // 24h
+	2880:  true, // 2d
+	10080: true, // 7d
 }
 
 // IsAllowedHistoryBucket reports whether a bucket-seconds value is in the
@@ -230,7 +249,7 @@ func (s *ServerService) isFail2banInstalled() bool {
 		return s.fail2banInstalled
 	}
 
-	err := exec.Command("fail2ban-client", "-h").Run()
+	err := exec.CommandContext(context.Background(), "fail2ban-client", "-h").Run()
 	s.fail2banInstalled = err == nil
 	s.fail2banCheckedAt = time.Now()
 	return s.fail2banInstalled
@@ -334,13 +353,27 @@ func (s *ServerService) AggregateSystemMetric(metric string, bucketSeconds int, 
 }
 
 type LogEntry struct {
-	DateTime    time.Time
-	FromAddress string
-	ToAddress   string
-	Inbound     string
-	Outbound    string
-	Email       string
-	Event       int
+	DateTime    time.Time `json:"DateTime" example:"2025-01-01T12:00:00Z"`
+	FromAddress string    `json:"FromAddress" example:"192.0.2.10:54321"`
+	ToAddress   string    `json:"ToAddress" example:"example.com:443"`
+	Inbound     string    `json:"Inbound" example:"inbound-443"`
+	Outbound    string    `json:"Outbound" example:"direct"`
+	Email       string    `json:"Email" example:"alice@example.com"`
+	Event       int       `json:"Event" example:"0"`
+}
+
+type NewUUIDResponse struct {
+	UUID string `json:"uuid" example:"550e8400-e29b-41d4-a716-446655440000"`
+}
+
+type MLDSA65Response struct {
+	Seed   string `json:"seed" example:"mldsa65-seed"`
+	Verify string `json:"verify" example:"mldsa65-verify"`
+}
+
+type MLKEM768Response struct {
+	Seed   string `json:"seed" example:"mlkem768-seed"`
+	Client string `json:"client" example:"mlkem768-client"`
 }
 
 func getPublicIP(url string) string {
@@ -348,7 +381,11 @@ func getPublicIP(url string) string {
 		Timeout: 3 * time.Second,
 	}
 
-	resp, err := client.Get(url)
+	req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if reqErr != nil {
+		return "N/A"
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "N/A"
 	}
@@ -373,6 +410,53 @@ func getPublicIP(url string) string {
 	}
 
 	return ipString
+}
+
+var publicIPv4Services = []string{
+	"https://api4.ipify.org",
+	"https://ipv4.icanhazip.com",
+	"https://v4.api.ipinfo.io/ip",
+	"https://ipv4.myexternalip.com/raw",
+	"https://4.ident.me",
+	"https://check-host.net/ip",
+}
+
+var publicIPv6Services = []string{
+	"https://api6.ipify.org",
+	"https://ipv6.icanhazip.com",
+	"https://v6.api.ipinfo.io/ip",
+	"https://ipv6.myexternalip.com/raw",
+	"https://6.ident.me",
+}
+
+// resolvePublicIPs caches the public IPv4/IPv6 addresses on first use. Guarded
+// by s.mu because the bot's ServerService may call it from sendBackup while a
+// status report runs concurrently.
+func (s *ServerService) resolvePublicIPs() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.cachedIPv4 == "" {
+		for _, ip4Service := range publicIPv4Services {
+			s.cachedIPv4 = getPublicIP(ip4Service)
+			if s.cachedIPv4 != "N/A" {
+				break
+			}
+		}
+	}
+
+	if s.cachedIPv6 == "" && !s.noIPv6 {
+		for _, ip6Service := range publicIPv6Services {
+			s.cachedIPv6 = getPublicIP(ip6Service)
+			if s.cachedIPv6 != "N/A" {
+				break
+			}
+		}
+	}
+
+	if s.cachedIPv6 == "N/A" {
+		s.noIPv6 = true
+	}
 }
 
 func (s *ServerService) GetStatus(lastStatus *Status) *Status {
@@ -536,52 +620,16 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 		logger.Warning("get udp connections failed:", err)
 	}
 
-	// IP fetching with caching
-	showIp4ServiceLists := []string{
-		"https://api4.ipify.org",
-		"https://ipv4.icanhazip.com",
-		"https://v4.api.ipinfo.io/ip",
-		"https://ipv4.myexternalip.com/raw",
-		"https://4.ident.me",
-		"https://check-host.net/ip",
-	}
-	showIp6ServiceLists := []string{
-		"https://api6.ipify.org",
-		"https://ipv6.icanhazip.com",
-		"https://v6.api.ipinfo.io/ip",
-		"https://ipv6.myexternalip.com/raw",
-		"https://6.ident.me",
-	}
-
-	if s.cachedIPv4 == "" {
-		for _, ip4Service := range showIp4ServiceLists {
-			s.cachedIPv4 = getPublicIP(ip4Service)
-			if s.cachedIPv4 != "N/A" {
-				break
-			}
-		}
-	}
-
-	if s.cachedIPv6 == "" && !s.noIPv6 {
-		for _, ip6Service := range showIp6ServiceLists {
-			s.cachedIPv6 = getPublicIP(ip6Service)
-			if s.cachedIPv6 != "N/A" {
-				break
-			}
-		}
-	}
-
-	if s.cachedIPv6 == "N/A" {
-		s.noIPv6 = true
-	}
-
+	s.resolvePublicIPs()
 	status.PublicIP.IPv4 = s.cachedIPv4
 	status.PublicIP.IPv6 = s.cachedIPv6
 
 	// Xray status
 	if s.xrayService.IsXrayRunning() {
 		status.Xray.State = Running
-		status.Xray.ErrorMsg = ""
+		// A core that runs but was refused the new config is a fault the
+		// operator only ever sees here and in the node list.
+		status.Xray.ErrorMsg = s.xrayService.GetHeldBackConfig()
 	} else {
 		err := s.xrayService.GetXrayErr()
 		if err != nil {
@@ -592,18 +640,32 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 		status.Xray.ErrorMsg = s.xrayService.GetXrayResult()
 	}
 	status.Xray.Version = s.xrayService.GetXrayVersion()
-	status.PanelVersion = config.GetVersion()
+
+	var amneziawgCount int64
+	if err := database.GetDB().Model(model.Inbound{}).
+		Where("protocol = ? AND enable = ? AND node_id IS NULL", model.AmneziaWG, true).
+		Count(&amneziawgCount).Error; err != nil {
+		logger.Warning("count amneziawg inbounds failed:", err)
+	}
+	status.AmneziaWG.Configured = amneziawgCount > 0
+	status.AmneziaWG.Running = amneziawgnet.GetManager().HasRunning()
+
+	status.PanelVersion = config.GetPanelVersion()
 	if guid, err := s.settingService.GetPanelGuid(); err == nil {
 		status.PanelGuid = guid
 	}
 
 	// Application stats
-	var rtm runtime.MemStats
-	runtime.ReadMemStats(&rtm)
-	status.AppStats.Mem = rtm.Sys
+	if rss := sys.SelfRSS(); rss > 0 {
+		status.AppStats.Mem = rss
+	} else {
+		var rtm runtime.MemStats
+		runtime.ReadMemStats(&rtm)
+		status.AppStats.Mem = rtm.Sys
+	}
 	status.AppStats.Threads = uint32(runtime.NumGoroutine())
-	if p != nil && p.IsRunning() {
-		status.AppStats.Uptime = p.GetUptime()
+	if process := currentXrayProcess(); process != nil && process.IsRunning() {
+		status.AppStats.Uptime = process.GetUptime()
 	} else {
 		status.AppStats.Uptime = 0
 	}
@@ -646,8 +708,8 @@ func (s *ServerService) AppendStatusSample(t time.Time, status *Status) {
 	systemMetrics.append("tcpCount", t, float64(status.TcpCount))
 	systemMetrics.append("udpCount", t, float64(status.UdpCount))
 	online := 0
-	if p != nil && p.IsRunning() {
-		online = len(p.GetOnlineClients())
+	if process := currentXrayProcess(); process != nil && process.IsRunning() {
+		online = len(process.GetOnlineClients())
 	}
 	systemMetrics.append("online", t, float64(online))
 	if len(status.Loads) >= 3 {
@@ -756,7 +818,11 @@ func (s *ServerService) GetXrayVersions() ([]string, error) {
 		bufferSize = 8192
 	)
 
-	resp, err := s.settingService.NewProxiedHTTPClient(10 * time.Second).Get(XrayURL)
+	req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, XrayURL, nil)
+	if reqErr != nil {
+		return nil, reqErr
+	}
+	resp, err := s.settingService.NewProxiedHTTPClient(10 * time.Second).Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -800,7 +866,7 @@ func (s *ServerService) GetXrayVersions() ([]string, error) {
 			continue
 		}
 
-		if major > 26 || (major == 26 && minor > 4) || (major == 26 && minor == 4 && patch >= 25) {
+		if major > 26 || (major == 26 && minor > 6) || (major == 26 && minor == 6 && patch >= 27) {
 			versions = append(versions, release.TagName)
 		}
 	}
@@ -856,7 +922,11 @@ func (s *ServerService) downloadXRay(version string) (string, error) {
 	fileName := fmt.Sprintf("Xray-%s-%s.zip", osName, arch)
 	url := fmt.Sprintf("https://github.com/XTLS/Xray-core/releases/download/%s/%s", version, fileName)
 	client := s.settingService.NewProxiedHTTPClient(60 * time.Second)
-	resp, err := client.Get(url)
+	req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if reqErr != nil {
+		return "", reqErr
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -918,7 +988,11 @@ func (s *ServerService) downloadXRay(version string) (string, error) {
 // fetchXrayDigestSHA256 downloads the .dgst sidecar XTLS publishes next to each
 // release asset and returns the SHA2-256 hex digest it lists.
 func (s *ServerService) fetchXrayDigestSHA256(client *http.Client, dgstURL string) (string, error) {
-	resp, err := client.Get(dgstURL)
+	req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, dgstURL, nil)
+	if reqErr != nil {
+		return "", fmt.Errorf("download xray checksum: %w", reqErr)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("download xray checksum: %w", err)
 	}
@@ -993,7 +1067,7 @@ func (s *ServerService) UpdateXray(version string) error {
 			return err
 		}
 		defer zipFile.Close()
-		if err := os.MkdirAll(filepath.Dir(fileName), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(fileName), 0o755); err != nil {
 			return err
 		}
 		tmpFile, err := os.CreateTemp(filepath.Dir(fileName), ".xray-*")
@@ -1015,7 +1089,7 @@ func (s *ServerService) UpdateXray(version string) error {
 		if n > maxXrayBinaryBytes {
 			return fmt.Errorf("xray binary exceeds %d bytes", maxXrayBinaryBytes)
 		}
-		if err := tmpFile.Chmod(0755); err != nil {
+		if err := tmpFile.Chmod(0o755); err != nil {
 			return err
 		}
 		if err := tmpFile.Close(); err != nil {
@@ -1083,7 +1157,7 @@ func (s *ServerService) GetLogs(count string, level string, syslog string) []str
 		}
 
 		// Use hardcoded command with validated parameters
-		cmd := exec.Command("journalctl", "-u", "x-ui", "--no-pager", "-n", strconv.Itoa(countInt), "-p", level)
+		cmd := exec.CommandContext(context.Background(), "journalctl", "-u", "x-ui", "--no-pager", "-n", strconv.Itoa(countInt), "-p", level)
 		var out bytes.Buffer
 		cmd.Stdout = &out
 		err = cmd.Run()
@@ -1098,6 +1172,182 @@ func (s *ServerService) GetLogs(count string, level string, syslog string) []str
 	return lines
 }
 
+// parseAccessLogFields extracts the structured fields from one Xray access-log
+// line. Lines are attacker-influenced (a client's requested destination lands in
+// the log verbatim) and may be truncated, so every positional lookup is length
+// guarded: a malformed line yields a partial entry rather than panicking.
+func parseAccessLogFields(line string) LogEntry {
+	var entry LogEntry
+	parts := strings.Fields(line)
+
+	for i, part := range parts {
+
+		if i == 0 && len(parts) > 1 {
+			dateTime, err := time.ParseInLocation("2006/01/02 15:04:05.999999", parts[0]+" "+parts[1], time.Local)
+			if err != nil {
+				continue
+			}
+			entry.DateTime = dateTime.UTC()
+		}
+
+		if part == "from" && i+1 < len(parts) {
+			entry.FromAddress = strings.TrimLeft(parts[i+1], "/")
+		} else if part == "accepted" && i+1 < len(parts) {
+			entry.ToAddress = strings.TrimLeft(parts[i+1], "/")
+		} else if strings.HasPrefix(part, "[") {
+			entry.Inbound = part[1:]
+		} else if strings.HasSuffix(part, "]") {
+			entry.Outbound = part[:len(part)-1]
+		} else if part == "email:" && i+1 < len(parts) {
+			entry.Email = parts[i+1]
+		}
+	}
+
+	return entry
+}
+
+// PeerActivity is one peer's live embedded-Device-reported state, the
+// counterpart of an Xray access-log entry: a tunnel logs no requests, only
+// handshakes and bytes.
+type PeerActivity struct {
+	Interface  string `json:"interface" example:"awg1"`
+	Tag        string `json:"tag" example:"inbound-51820"`
+	InboundId  int    `json:"inboundId" example:"1"`
+	Email      string `json:"email" example:"peer@example.com"`
+	Endpoint   string `json:"endpoint" example:"203.0.113.9:51820"`
+	AllowedIPs string `json:"allowedIPs" example:"10.8.1.2/32"`
+	// Handshake is unix milliseconds, 0 when the peer has never connected.
+	Handshake int64 `json:"handshake" example:"1735732800000"`
+	Up        int64 `json:"up" example:"1048576"`
+	Down      int64 `json:"down" example:"4194304"`
+	Online    bool  `json:"online" example:"true"`
+}
+
+// amneziawgOnlineWindow mirrors the standard WireGuard convention (and this
+// fork's own prior kernel-module behavior): a handshake this recent counts
+// as online.
+const amneziawgOnlineWindow = 180 * time.Second
+
+// AmneziaWGLogs is what the overview's AmneziaWG log view renders: the live
+// per-peer activity of every running embedded interface, plus the panel's
+// own recent AmneziaWG lifecycle log lines that explain a peer being absent
+// from Peers at all.
+type AmneziaWGLogs struct {
+	Peers   []PeerActivity `json:"peers"`
+	Events  []string       `json:"events" example:"[\"2025/01/01 12:00:00 amneziawg: started interface awg1 for inbound 1\"]"`
+	Running bool           `json:"running" example:"true"`
+}
+
+// amneziawgEventMarker selects the panel's own AmneziaWG log lines: every
+// logger call in internal/amneziawg, internal/amneziawgnet and their jobs
+// prefixes its message with it.
+const amneziawgEventMarker = "amneziawg"
+
+// amneziawgLogActivity gathers live PeerActivity rows across every enabled,
+// non-node-hosted AmneziaWG inbound, newest handshake first. An inbound
+// amneziawgnet has no running Device for yet (not reconciled, disabled,
+// errored) contributes no rows -- not reported as an error, since the
+// caller (GetAmneziaWGLogs) already has a device-agnostic Running flag from
+// amneziawgnet.GetManager().HasRunning() for that.
+// clampUint64ToInt64 saturates at math.MaxInt64 instead of wrapping negative,
+// for a live uint64 byte counter (amneziawgnet's own UAPI-dump snapshot, not
+// a DB-accumulated total) going into an int64 API field -- unreachable in
+// practice at real traffic volumes, but a silent negative value would be
+// worse than a saturated one if it were ever hit.
+func clampUint64ToInt64(v uint64) int64 {
+	if v > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(v)
+}
+
+func amneziawgLogActivity() []PeerActivity {
+	var inbounds []*model.Inbound
+	if err := database.GetDB().
+		Where("protocol = ? AND enable = ? AND node_id IS NULL", model.AmneziaWG, true).
+		Find(&inbounds).Error; err != nil {
+		logger.Warning("amneziawg logs: list inbounds failed:", err)
+		return nil
+	}
+
+	now := time.Now()
+	var out []PeerActivity
+	for _, inbound := range inbounds {
+		inst, ok := amneziawg.InstanceFromInbound(inbound)
+		if !ok {
+			continue
+		}
+		diag := amneziawgnet.Diagnose(inbound.Id, inst.Peers)
+		if !diag.Running {
+			continue
+		}
+		for _, cd := range diag.Clients {
+			var handshakeMs int64
+			online := false
+			if !cd.LastHandshake.IsZero() {
+				handshakeMs = cd.LastHandshake.UnixMilli()
+				online = now.Sub(cd.LastHandshake) < amneziawgOnlineWindow
+			}
+			out = append(out, PeerActivity{
+				Interface:  inst.InterfaceName,
+				Tag:        inbound.Tag,
+				InboundId:  inbound.Id,
+				Email:      cd.Email,
+				Endpoint:   cd.Endpoint,
+				AllowedIPs: cd.AllowedIPs,
+				Handshake:  handshakeMs,
+				Up:         clampUint64ToInt64(cd.RxBytes),
+				Down:       clampUint64ToInt64(cd.TxBytes),
+				Online:     online,
+			})
+		}
+	}
+	slices.SortFunc(out, func(a, b PeerActivity) int {
+		if a.Handshake != b.Handshake {
+			return cmp.Compare(b.Handshake, a.Handshake)
+		}
+		return strings.Compare(a.Email, b.Email)
+	})
+	return out
+}
+
+// GetAmneziaWGLogs returns at most count peer rows and count event lines,
+// optionally narrowed to rows whose text contains filter (case-insensitive),
+// mirroring GetXrayLogs' own count+filter contract.
+func (s *ServerService) GetAmneziaWGLogs(count string, filter string) *AmneziaWGLogs {
+	limit, err := strconv.Atoi(count)
+	if err != nil || limit < 1 || limit > 10000 {
+		limit = 100
+	}
+	needle := strings.ToLower(strings.TrimSpace(filter))
+
+	logs := &AmneziaWGLogs{Peers: []PeerActivity{}, Events: []string{}, Running: amneziawgnet.GetManager().HasRunning()}
+
+	for _, peer := range amneziawgLogActivity() {
+		if len(logs.Peers) >= limit {
+			break
+		}
+		if needle != "" && !strings.Contains(strings.ToLower(peer.Email+" "+peer.Tag+" "+peer.Interface+" "+peer.Endpoint+" "+peer.AllowedIPs), needle) {
+			continue
+		}
+		logs.Peers = append(logs.Peers, peer)
+	}
+
+	for _, line := range logger.GetLogs(10000, "debug") {
+		if len(logs.Events) >= limit {
+			break
+		}
+		if !strings.Contains(strings.ToLower(line), amneziawgEventMarker) {
+			continue
+		}
+		if needle != "" && !strings.Contains(strings.ToLower(line), needle) {
+			continue
+		}
+		logs.Events = append(logs.Events, line)
+	}
+	return logs
+}
+
 func (s *ServerService) GetXrayLogs(
 	count string,
 	filter string,
@@ -1105,8 +1355,8 @@ func (s *ServerService) GetXrayLogs(
 	showBlocked string,
 	showProxy string,
 	freedoms []string,
-	blackholes []string) []LogEntry {
-
+	blackholes []string,
+) []LogEntry {
 	const (
 		Direct = iota
 		Blocked
@@ -1133,40 +1383,16 @@ func (s *ServerService) GetXrayLogs(
 		line := strings.TrimSpace(scanner.Text())
 
 		if line == "" || strings.Contains(line, "api -> api") {
-			//skipping empty lines and api calls
+			// skipping empty lines and api calls
 			continue
 		}
 
 		if filter != "" && !strings.Contains(line, filter) {
-			//applying filter if it's not empty
+			// applying filter if it's not empty
 			continue
 		}
 
-		var entry LogEntry
-		parts := strings.Fields(line)
-
-		for i, part := range parts {
-
-			if i == 0 {
-				dateTime, err := time.ParseInLocation("2006/01/02 15:04:05.999999", parts[0]+" "+parts[1], time.Local)
-				if err != nil {
-					continue
-				}
-				entry.DateTime = dateTime.UTC()
-			}
-
-			if part == "from" {
-				entry.FromAddress = strings.TrimLeft(parts[i+1], "/")
-			} else if part == "accepted" {
-				entry.ToAddress = strings.TrimLeft(parts[i+1], "/")
-			} else if strings.HasPrefix(part, "[") {
-				entry.Inbound = part[1:]
-			} else if strings.HasSuffix(part, "]") {
-				entry.Outbound = part[:len(part)-1]
-			} else if part == "email:" {
-				entry.Email = parts[i+1]
-			}
-		}
+		entry := parseAccessLogFields(line)
 
 		if logEntryContains(line, freedoms) {
 			if showDirect == "false" {
@@ -1259,46 +1485,61 @@ func (s *ServerService) GetDb() ([]byte, error) {
 	if database.IsPostgres() {
 		return s.exportPostgresDB()
 	}
-	// Update by manually trigger a checkpoint operation
-	err := database.Checkpoint()
+	backupPath, cleanup, err := s.backupSQLite()
 	if err != nil {
 		return nil, err
 	}
-	// Open the file for reading
-	file, err := os.Open(config.GetDBPath())
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
+	defer cleanup()
+	return os.ReadFile(backupPath)
+}
 
-	// Read the file contents
-	fileContents, err := io.ReadAll(file)
+func (s *ServerService) backupSQLite() (string, func(), error) {
+	backupDir, err := os.MkdirTemp(filepath.Dir(config.GetDBPath()), ".x-ui-backup-")
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
-
-	return fileContents, nil
+	cleanup := func() { _ = os.RemoveAll(backupDir) }
+	backupPath := filepath.Join(backupDir, "backup.db")
+	if err := database.BackupSQLite(backupPath); err != nil {
+		cleanup()
+		return "", nil, err
+	}
+	return backupPath, cleanup, nil
 }
 
 // BackupFilename returns the filename for a database backup, named after the
 // panel's address so a downloaded or Telegram-sent backup identifies the server
-// it came from. requestHost is the browser's address (the getDb handler passes
-// c.Request.Host, matching the host shown in the panel title); it is preferred
-// when present, otherwise the configured web domain and then the server's public
-// IP are used. The extension is .dump on PostgreSQL and .db on SQLite; the base
-// falls back to "x-ui" when no address is known.
+// it came from, followed by the current date and time (_YYYY-MM-DD_HHMMSS) so
+// files accumulated in Telegram chat history group by server then sort
+// chronologically and same-day backups stay distinct. requestHost is the
+// browser's address: the getDb handler passes c.Request.Host so a panel download
+// is named after whatever address the user reached the panel with, no Listen
+// Domain needed. The Telegram bot has no request and passes "", falling back to
+// the configured Listen Domain (webDomain) and then the public IP. The extension
+// is .dump on PostgreSQL and .db on SQLite; the base falls back to "x-ui" when
+// no address is known.
 func (s *ServerService) BackupFilename(requestHost string) string {
 	ext := ".db"
 	if database.IsPostgres() {
 		ext = ".dump"
 	}
-	return s.backupHost(requestHost) + ext
+	return s.backupHost(requestHost) + backupDateSuffix(time.Now()) + ext
+}
+
+// backupDateSuffix returns the _YYYY-MM-DD_HHMMSS chronological suffix appended
+// after the host in backup filenames. Uses server-local time for consistency
+// with the timestamp printed in the Telegram backup message body.
+func backupDateSuffix(now time.Time) string {
+	return "_" + now.Format("2006-01-02_150405")
 }
 
 // backupHost picks the address used to name backup files: the browser's request
-// host (port stripped, the same value the panel title shows) when available,
-// otherwise the configured web domain and then the cached public IP (IPv4 before
-// IPv6), reduced to safe filename characters.
+// host (port stripped) when available, otherwise the configured Listen Domain
+// (webDomain) and then the resolved public IP (IPv4 before IPv6), reduced to safe
+// filename characters. The public IP is resolved directly rather than read from
+// LastStatus so callers whose ServerService never runs the status ticker —
+// notably the Telegram bot — still get a real address instead of the "x-ui"
+// fallback.
 func (s *ServerService) backupHost(requestHost string) string {
 	host := extractHostname(strings.TrimSpace(requestHost))
 	if host == "" {
@@ -1307,12 +1548,11 @@ func (s *ServerService) backupHost(requestHost string) string {
 		}
 	}
 	if host == "" {
-		if st := s.LastStatus(); st != nil {
-			if ip := st.PublicIP.IPv4; ip != "" && ip != "N/A" {
-				host = ip
-			} else if ip := st.PublicIP.IPv6; ip != "" && ip != "N/A" {
-				host = ip
-			}
+		s.resolvePublicIPs()
+		if ip := s.cachedIPv4; ip != "" && ip != "N/A" {
+			host = ip
+		} else if ip := s.cachedIPv6; ip != "" && ip != "N/A" {
+			host = ip
 		}
 	}
 	return sanitizeBackupHost(host)
@@ -1364,79 +1604,126 @@ func (s *ServerService) GetMigration() ([]byte, string, error) {
 		return data, "x-ui.db", nil
 	}
 
-	// SQLite panel: checkpoint so the .db reflects the latest writes, then dump.
-	if err := database.Checkpoint(); err != nil {
+	backupPath, cleanup, err := s.backupSQLite()
+	if err != nil {
 		return nil, "", err
 	}
-	data, err := database.DumpSQLiteToBytes(config.GetDBPath())
+	defer cleanup()
+	data, err := database.DumpSQLiteToBytes(backupPath)
 	if err != nil {
 		return nil, "", err
 	}
 	return data, "x-ui.dump", nil
 }
 
-// ImportedButXrayFailedError reports that a restore fully succeeded — the
-// uploaded database is in place and open — but Xray would not start again
-// afterwards.
-//
-// This distinction matters: by the time Xray is restarted the swap has already
-// happened and cannot be undone, so reporting a plain failure would tell the
-// admin their restore did not work while their panel is in fact running on the
-// restored data. Callers surface it as a success carrying a warning, which also
-// keeps the UI on its post-import path (restart the panel, reload the page)
-// instead of leaving a freshly restored database behind a stale page.
-type ImportedButXrayFailedError struct {
-	Cause error
+// hostBoundSettingKeys are the settings that describe *this* machine rather
+// than the configuration being carried: where the panel and the subscription
+// service listen, the certificates they present, and the identity this panel
+// uses towards its nodes. An import that overwrites them leaves the
+// destination unreachable on its own address, or impersonating the source.
+var hostBoundSettingKeys = []string{
+	"webListen", "webDomain", "webPort", "webCertFile", "webKeyFile", "webBasePath",
+	"subListen", "subDomain", "subPort", "subCertFile", "subKeyFile", "subURI", "subJsonURI",
+	"secret", "panelGuid",
+	"nodeMtlsCaCertPem", "nodeMtlsCaKeyPem", "nodeMtlsClientCertPem",
+	"nodeMtlsClientKeyPem", "nodeMtlsClientCertSha256", "nodeMtlsClientCAPem",
 }
 
-func (e *ImportedButXrayFailedError) Error() string {
-	return fmt.Sprintf("database restored, but Xray failed to start: %v", e.Cause)
+// hostBoundSnapshot records this machine's values, and just as importantly
+// which keys it had no row for: an absent row means the built-in default is in
+// force, and leaving the imported row in place would silently adopt the source
+// machine's certificate path or listen address.
+type hostBoundSnapshot struct {
+	values  map[string]string
+	present map[string]struct{}
+	taken   bool
 }
 
-func (e *ImportedButXrayFailedError) Unwrap() error { return e.Cause }
+func captureHostBoundSettings() hostBoundSnapshot {
+	db := database.GetDB()
+	if db == nil {
+		return hostBoundSnapshot{}
+	}
+	var rows []model.Setting
+	if err := db.Model(&model.Setting{}).Where("key IN ?", hostBoundSettingKeys).Find(&rows).Error; err != nil {
+		logger.Warningf("Import: could not read this machine's settings, they will come from the uploaded file: %v", err)
+		return hostBoundSnapshot{}
+	}
+	snap := hostBoundSnapshot{
+		values:  make(map[string]string, len(rows)),
+		present: make(map[string]struct{}, len(rows)),
+		taken:   true,
+	}
+	for _, row := range rows {
+		snap.values[row.Key] = row.Value
+		snap.present[row.Key] = struct{}{}
+	}
+	return snap
+}
 
-func (s *ServerService) ImportDB(file multipart.File) error {
+func restoreHostBoundSettings(snap hostBoundSnapshot) {
+	if !snap.taken {
+		return
+	}
+	db := database.GetDB()
+	if db == nil {
+		return
+	}
+	settingSvc := &SettingService{}
+	for _, key := range hostBoundSettingKeys {
+		if _, had := snap.present[key]; !had {
+			// Absent because it is minted on demand, not because a default applied:
+			// the imported copy is the only one that exists, so keep it (#6227).
+			if lazilyMintedSettingKeys[key] {
+				continue
+			}
+			if err := db.Where("key = ?", key).Delete(&model.Setting{}).Error; err != nil {
+				logger.Warningf("Import: could not drop imported setting %q: %v", key, err)
+			}
+			continue
+		}
+		// saveSetting rather than Assign(struct): GORM drops zero-valued fields from
+		// the assignment map, so an empty local value never overwrote the import.
+		if err := settingSvc.saveSetting(key, snap.values[key]); err != nil {
+			logger.Warningf("Import: could not restore setting %q for this machine: %v", key, err)
+		}
+	}
+}
+
+// Minted on demand, so a fresh install has no row: dropping the imported copy
+// would destroy the only one that exists, CA private key included.
+var lazilyMintedSettingKeys = map[string]bool{
+	"nodeMtlsCaCertPem":     true,
+	"nodeMtlsCaKeyPem":      true,
+	"nodeMtlsClientCertPem": true,
+	"nodeMtlsClientKeyPem":  true,
+	"nodeMtlsClientCAPem":   true,
+}
+
+func (s *ServerService) ImportDB(file multipart.File, keepHostSettings bool) error {
 	if database.IsPostgres() {
-		return s.importPostgresDB(file)
+		return s.importPostgresDB(file, keepHostSettings)
 	}
-	// Check if the file is a SQLite database
-	isValidDb, err := database.IsSQLiteDB(file)
+	kind, err := sniffUploadKind(file)
 	if err != nil {
-		return common.NewErrorf("Error checking db file format: %v", err)
+		return common.NewErrorf("Error reading uploaded file: %v", err)
 	}
-	if !isValidDb {
-		return common.NewError("Invalid db file format")
+	switch kind {
+	case importKindSQLiteDB, importKindSQLiteDump:
+	case importKindPgDump:
+		return common.NewError("This file is a PostgreSQL backup; it can only be restored on a panel running PostgreSQL")
+	default:
+		return common.NewError("Invalid file: expected a SQLite database (.db) from Back Up or a SQLite migration dump (.dump)")
 	}
 
-	// Reset the file reader to the beginning
-	_, err = file.Seek(0, 0)
-	if err != nil {
-		return common.NewErrorf("Error resetting file reader: %v", err)
-	}
-
-	// Save the file as a temporary file
 	tempPath := fmt.Sprintf("%s.temp", config.GetDBPath())
 
-	// Remove the existing temporary file (if any)
 	if _, err := os.Stat(tempPath); err == nil {
 		if errRemove := os.Remove(tempPath); errRemove != nil {
 			return common.NewErrorf("Error removing existing temporary db file: %v", errRemove)
 		}
 	}
-
-	// Create the temporary file
-	tempFile, err := os.Create(tempPath)
-	if err != nil {
-		return common.NewErrorf("Error creating temporary db file: %v", err)
-	}
-
-	// Robust deferred cleanup for the temporary file
 	defer func() {
-		if tempFile != nil {
-			if cerr := tempFile.Close(); cerr != nil {
-				logger.Warningf("Warning: failed to close temp file: %v", cerr)
-			}
-		}
 		if _, err := os.Stat(tempPath); err == nil {
 			if rerr := os.Remove(tempPath); rerr != nil {
 				logger.Warningf("Warning: failed to remove temp file: %v", rerr)
@@ -1444,20 +1731,15 @@ func (s *ServerService) ImportDB(file multipart.File) error {
 		}
 	}()
 
-	// Save uploaded file to temporary file
-	if _, err = io.Copy(tempFile, file); err != nil {
-		return common.NewErrorf("Error saving db: %v", err)
+	if err := stageSQLiteUpload(file, kind, tempPath); err != nil {
+		return err
 	}
 
-	// Close temp file before opening via sqlite
-	if err = tempFile.Close(); err != nil {
-		return common.NewErrorf("Error closing temporary db file: %v", err)
-	}
-	tempFile = nil
-
-	// Validate integrity (no migrations / side effects)
 	if err = database.ValidateSQLiteDB(tempPath); err != nil {
 		return common.NewErrorf("Invalid or corrupt db file: %v", err)
+	}
+	if err = database.PrepareSQLiteForMigration(tempPath); err != nil {
+		return common.NewErrorf("This file cannot be imported: %v", err)
 	}
 
 	xrayStopped := true
@@ -1472,9 +1754,27 @@ func (s *ServerService) ImportDB(file multipart.File) error {
 		logger.Warningf("Failed to stop Xray before DB import: %v", errStop)
 	}
 
+	var keptSettings hostBoundSnapshot
+	if keepHostSettings {
+		keptSettings = captureHostBoundSettings()
+	}
+
 	if errClose := database.CloseDB(); errClose != nil {
 		logger.Warningf("Failed to close existing DB before replacement: %v", errClose)
 	}
+
+	// Registered after the xray-restart defer so it runs first (LIFO): every
+	// error return below leaves a database file at the configured path, and the
+	// restart needs an open pool to build the xray config from it.
+	dbReopened := false
+	defer func() {
+		if dbReopened {
+			return
+		}
+		if errReopen := database.InitDB(config.GetDBPath()); errReopen != nil {
+			logger.Warningf("Failed to reopen the database after import error: %v", errReopen)
+		}
+	}()
 
 	// Backup the current database for fallback
 	fallbackPath := fmt.Sprintf("%s.backup", config.GetDBPath())
@@ -1491,15 +1791,6 @@ func (s *ServerService) ImportDB(file multipart.File) error {
 		return common.NewErrorf("Error backing up current db file: %v", err)
 	}
 
-	// Defer fallback cleanup ONLY if everything goes well
-	defer func() {
-		if _, err := os.Stat(fallbackPath); err == nil {
-			if rerr := os.Remove(fallbackPath); rerr != nil {
-				logger.Warningf("Warning: failed to remove fallback file: %v", rerr)
-			}
-		}
-	}()
-
 	// Move temp to DB path
 	if err = os.Rename(tempPath, config.GetDBPath()); err != nil {
 		// Restore from fallback
@@ -1511,19 +1802,32 @@ func (s *ServerService) ImportDB(file multipart.File) error {
 
 	// Open & migrate new DB
 	if err = database.InitDB(config.GetDBPath()); err != nil {
+		// A failed InitDB still holds the imported file open; close before the
+		// rename or Windows refuses to replace it.
+		if errClose := database.CloseDB(); errClose != nil {
+			logger.Warningf("Failed to close the imported DB before restoring fallback: %v", errClose)
+		}
 		if errRename := os.Rename(fallbackPath, config.GetDBPath()); errRename != nil {
 			return common.NewErrorf("Error migrating db and restoring fallback: %v", errRename)
 		}
 		return common.NewErrorf("Error migrating db: %v", err)
 	}
+	dbReopened = true
+
+	restoreHostBoundSettings(keptSettings)
 
 	s.inboundService.MigrateDB()
 
 	xrayStopped = false
 	if err = s.RestartXrayService(); err != nil {
-		return &ImportedButXrayFailedError{Cause: err}
+		return common.NewErrorf("Imported DB but failed to start Xray: %v; the previous database was kept at %s", err, fallbackPath)
 	}
 
+	if _, err := os.Stat(fallbackPath); err == nil {
+		if rerr := os.Remove(fallbackPath); rerr != nil {
+			logger.Warningf("Warning: failed to remove fallback file: %v", rerr)
+		}
+	}
 	return nil
 }
 
@@ -1571,7 +1875,7 @@ func (s *ServerService) exportPostgresDB() ([]byte, error) {
 	if err != nil {
 		return nil, common.NewErrorf("invalid PostgreSQL DSN: %v", err)
 	}
-	cmd := exec.Command(bin, "--format=custom", "--no-owner", "--no-privileges", "--dbname", dbname)
+	cmd := exec.CommandContext(context.Background(), bin, "--format=custom", "--no-owner", "--no-privileges", "--dbname", dbname)
 	cmd.Env = env
 	var out, stderr bytes.Buffer
 	cmd.Stdout = &out
@@ -1582,18 +1886,108 @@ func (s *ServerService) exportPostgresDB() ([]byte, error) {
 	return out.Bytes(), nil
 }
 
-func (s *ServerService) importPostgresDB(file multipart.File) error {
-	header := make([]byte, 5)
-	if _, err := file.ReadAt(header, 0); err != nil {
-		return common.NewErrorf("Error reading dump file: %v", err)
+var (
+	pgUnsupportedDumpVersionPattern = regexp.MustCompile(`unsupported version \((\d+\.\d+)\) in file header`)
+	pgToolVersionPattern            = regexp.MustCompile(`\d+(?:\.\d+)+`)
+)
+
+var pgArchiveVersionIntroducedIn = map[string]int{
+	"1.15": 16,
+	"1.16": 17,
+}
+
+// checkPgRestoreCanRead probes the dump with pg_restore --list (reads only the
+// TOC, no database connection) so an unreadable file fails before Xray is stopped.
+func checkPgRestoreCanRead(bin, dumpPath string) error {
+	cmd := exec.CommandContext(context.Background(), bin, "--list", dumpPath)
+	cmd.Stdout = io.Discard
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if cmd.Run() == nil {
+		return nil
 	}
-	if string(header) != "PGDMP" {
-		return common.NewError("Invalid file: expected a PostgreSQL custom-format dump (.dump) created by this panel's Back Up")
+	return pgRestoreReadFailureError(strings.TrimSpace(stderr.String()), pgRestoreVersion(bin))
+}
+
+func pgRestoreReadFailureError(probeOutput, localVersion string) error {
+	m := pgUnsupportedDumpVersionPattern.FindStringSubmatch(probeOutput)
+	if m == nil {
+		return common.NewErrorf("pg_restore cannot read this dump file: %s", probeOutput)
+	}
+	if localVersion == "" {
+		localVersion = "unknown"
+	}
+	if major, known := pgArchiveVersionIntroducedIn[m[1]]; known {
+		return common.NewErrorf("This backup was created by pg_dump from PostgreSQL %d or newer, but the server's pg_restore is version %s and cannot read it; run 'x-ui pgclient %d' on the server (or upgrade the postgresql-client package to version %d or newer), then retry the import", major, localVersion, major, major)
+	}
+	return common.NewErrorf("This backup was created by a newer pg_dump than the server's pg_restore (version %s) can read; upgrade the postgresql-client package and retry the import", localVersion)
+}
+
+func pgRestoreVersion(bin string) string {
+	out, err := exec.CommandContext(context.Background(), bin, "--version").Output()
+	if err != nil {
+		return ""
+	}
+	return parsePgToolVersion(string(out))
+}
+
+func parsePgToolVersion(versionOutput string) string {
+	return pgToolVersionPattern.FindString(versionOutput)
+}
+
+const (
+	importKindUnknown = iota
+	importKindPgDump
+	importKindSQLiteDB
+	importKindSQLiteDump
+)
+
+// sniffImportKind classifies an uploaded restore file by its leading bytes:
+// a pg_dump custom archive, a raw SQLite database, or a SQLite SQL text dump.
+func sniffImportKind(header []byte) int {
+	if bytes.HasPrefix(header, []byte("PGDMP")) {
+		return importKindPgDump
+	}
+	if bytes.HasPrefix(header, []byte("SQLite format 3\x00")) {
+		return importKindSQLiteDB
+	}
+	text := bytes.TrimLeft(bytes.TrimPrefix(header, []byte("\xef\xbb\xbf")), " \t\r\n")
+	if bytes.HasPrefix(text, []byte("PRAGMA")) || bytes.HasPrefix(text, []byte("BEGIN TRANSACTION")) {
+		return importKindSQLiteDump
+	}
+	return importKindUnknown
+}
+
+func sniffUploadKind(file multipart.File) (int, error) {
+	header := make([]byte, 64)
+	n, err := file.ReadAt(header, 0)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return importKindUnknown, err
 	}
 	if _, err := file.Seek(0, 0); err != nil {
-		return common.NewErrorf("Error resetting file reader: %v", err)
+		return importKindUnknown, err
 	}
+	return sniffImportKind(header[:n]), nil
+}
 
+func (s *ServerService) importPostgresDB(file multipart.File, keepHostSettings bool) error {
+	kind, err := sniffUploadKind(file)
+	if err != nil {
+		return common.NewErrorf("Error reading uploaded file: %v", err)
+	}
+	switch kind {
+	case importKindPgDump:
+		return s.restorePostgresDump(file, keepHostSettings)
+	case importKindSQLiteDB:
+		return s.migrateSQLiteIntoPostgres(file, false)
+	case importKindSQLiteDump:
+		return s.migrateSQLiteIntoPostgres(file, true)
+	default:
+		return common.NewError("Invalid file: expected a PostgreSQL custom-format dump (.dump) from this panel's Back Up, a SQLite database (.db), or a SQLite migration dump")
+	}
+}
+
+func (s *ServerService) restorePostgresDump(file multipart.File, keepHostSettings bool) error {
 	bin, err := exec.LookPath("pg_restore")
 	if err != nil {
 		return common.NewError("pg_restore not found on the server; install the postgresql-client package to restore a PostgreSQL database")
@@ -1617,6 +2011,87 @@ func (s *ServerService) importPostgresDB(file multipart.File) error {
 		return common.NewErrorf("Error closing temporary dump file: %v", err)
 	}
 
+	if err := checkPgRestoreCanRead(bin, tempPath); err != nil {
+		return err
+	}
+
+	xrayStopped := true
+	defer func() {
+		if xrayStopped {
+			if errR := s.RestartXrayService(); errR != nil {
+				logger.Warningf("Failed to restart Xray after DB restore error: %v", errR)
+			}
+		}
+	}()
+	if errStop := s.StopXrayService(); errStop != nil {
+		logger.Warningf("Failed to stop Xray before DB restore: %v", errStop)
+	}
+
+	var keptSettings hostBoundSnapshot
+	if keepHostSettings {
+		keptSettings = captureHostBoundSettings()
+	}
+
+	if errClose := database.CloseDB(); errClose != nil {
+		logger.Warningf("Failed to close existing DB before restore: %v", errClose)
+	}
+
+	cmd := exec.CommandContext(context.Background(), bin,
+		"--clean", "--if-exists", "--no-owner", "--no-privileges",
+		"--single-transaction", "--dbname", dbname, tempPath,
+	)
+	cmd.Env = env
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+
+	if errInit := database.InitDB(config.GetDBPath()); errInit != nil {
+		return common.NewErrorf("Restore finished but reopening the database failed: %v", errInit)
+	}
+	restoreHostBoundSettings(keptSettings)
+
+	s.inboundService.MigrateDB()
+
+	if runErr != nil {
+		return common.NewErrorf("pg_restore failed (database left unchanged): %v: %s", runErr, strings.TrimSpace(stderr.String()))
+	}
+
+	xrayStopped = false
+	if err := s.RestartXrayService(); err != nil {
+		return common.NewErrorf("Restored DB but failed to start Xray: %v", err)
+	}
+	return nil
+}
+
+func (s *ServerService) migrateSQLiteIntoPostgres(file multipart.File, isSQLDump bool) error {
+	tempDir, err := os.MkdirTemp("", "x-ui-pg-migrate-*")
+	if err != nil {
+		return common.NewErrorf("Error creating temporary folder: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	uploadPath := filepath.Join(tempDir, "upload.db")
+	if isSQLDump {
+		uploadPath = filepath.Join(tempDir, "upload.dump")
+	}
+	if err := saveUploadedFile(file, uploadPath); err != nil {
+		return common.NewErrorf("Error saving uploaded file: %v", err)
+	}
+
+	dbPath := uploadPath
+	if isSQLDump {
+		dbPath = filepath.Join(tempDir, "restored.db")
+		if err := database.RestoreSQLite(uploadPath, dbPath); err != nil {
+			return common.NewErrorf("Error rebuilding a SQLite database from the migration dump: %v", err)
+		}
+	}
+	if err := database.ValidateSQLiteDB(dbPath); err != nil {
+		return common.NewErrorf("Invalid or corrupt db file: %v", err)
+	}
+	if err := database.PrepareSQLiteForMigration(dbPath); err != nil {
+		return common.NewErrorf("This file cannot be imported: %v", err)
+	}
+
 	xrayStopped := true
 	defer func() {
 		if xrayStopped {
@@ -1633,27 +2108,50 @@ func (s *ServerService) importPostgresDB(file multipart.File) error {
 		logger.Warningf("Failed to close existing DB before restore: %v", errClose)
 	}
 
-	cmd := exec.Command(bin,
-		"--clean", "--if-exists", "--no-owner", "--no-privileges",
-		"--single-transaction", "--dbname", dbname, tempPath,
-	)
-	cmd.Env = env
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	runErr := cmd.Run()
+	migrateErr := database.MigrateData(dbPath, config.GetDBDSN())
 
 	if errInit := database.InitDB(config.GetDBPath()); errInit != nil {
 		return common.NewErrorf("Restore finished but reopening the database failed: %v", errInit)
 	}
 	s.inboundService.MigrateDB()
 
-	if runErr != nil {
-		return common.NewErrorf("pg_restore failed (database left unchanged): %v: %s", runErr, strings.TrimSpace(stderr.String()))
+	if migrateErr != nil {
+		return common.NewErrorf("Importing the SQLite data into PostgreSQL failed: %v; the import runs in a single transaction, so the database was left unchanged", migrateErr)
 	}
 
 	xrayStopped = false
 	if err := s.RestartXrayService(); err != nil {
-		return &ImportedButXrayFailedError{Cause: err}
+		return common.NewErrorf("Restored DB but failed to start Xray: %v", err)
+	}
+	return nil
+}
+
+func saveUploadedFile(file multipart.File, dstPath string) error {
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(dst, file); err != nil {
+		dst.Close()
+		return err
+	}
+	return dst.Close()
+}
+
+func stageSQLiteUpload(file multipart.File, kind int, tempPath string) error {
+	if kind == importKindSQLiteDump {
+		dumpPath := tempPath + ".dump"
+		defer os.Remove(dumpPath)
+		if err := saveUploadedFile(file, dumpPath); err != nil {
+			return common.NewErrorf("Error saving migration dump: %v", err)
+		}
+		if err := database.RestoreSQLite(dumpPath, tempPath); err != nil {
+			return common.NewErrorf("Error rebuilding a SQLite database from the migration dump: %v", err)
+		}
+		return nil
+	}
+	if err := saveUploadedFile(file, tempPath); err != nil {
+		return common.NewErrorf("Error saving db: %v", err)
 	}
 	return nil
 }
@@ -1687,20 +2185,58 @@ func (s *ServerService) IsValidGeofileName(filename string) bool {
 	return matched
 }
 
-func (s *ServerService) UpdateGeofile(fileName string) error {
-	type geofileEntry struct {
-		URL      string
-		FileName string
-	}
-	geofileAllowlist := map[string]geofileEntry{
-		"geoip.dat":      {"https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat", "geoip.dat"},
-		"geosite.dat":    {"https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat", "geosite.dat"},
-		"geoip_IR.dat":   {"https://github.com/chocolate4u/Iran-v2ray-rules/releases/latest/download/geoip.dat", "geoip_IR.dat"},
-		"geosite_IR.dat": {"https://github.com/chocolate4u/Iran-v2ray-rules/releases/latest/download/geosite.dat", "geosite_IR.dat"},
-		"geoip_RU.dat":   {"https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geoip.dat", "geoip_RU.dat"},
-		"geosite_RU.dat": {"https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat", "geosite_RU.dat"},
-	}
+// Repo is the upstream release base and Asset the name it publishes under; all
+// three publish "geoip.dat", so only FileName tells the local copies apart.
+type geofileEntry struct {
+	Repo     string
+	Asset    string
+	FileName string
+}
 
+var geofileAllowlist = map[string]geofileEntry{
+	"geoip.dat":      {"https://github.com/Loyalsoldier/v2ray-rules-dat", "geoip.dat", "geoip.dat"},
+	"geosite.dat":    {"https://github.com/Loyalsoldier/v2ray-rules-dat", "geosite.dat", "geosite.dat"},
+	"geoip_IR.dat":   {"https://github.com/chocolate4u/Iran-v2ray-rules", "geoip.dat", "geoip_IR.dat"},
+	"geosite_IR.dat": {"https://github.com/chocolate4u/Iran-v2ray-rules", "geosite.dat", "geosite_IR.dat"},
+	"geoip_RU.dat":   {"https://github.com/runetfreedom/russia-v2ray-rules-dat", "geoip.dat", "geoip_RU.dat"},
+	"geosite_RU.dat": {"https://github.com/runetfreedom/russia-v2ray-rules-dat", "geosite.dat", "geosite_RU.dat"},
+}
+
+// GeodataSource identifies a file Xray downloads through its geodata configuration.
+type GeodataSource struct {
+	URL  string `json:"url"`
+	File string `json:"file"`
+}
+
+// StandardGeodataSources derives the panel presets from the geofile update allowlist.
+func StandardGeodataSources() []GeodataSource {
+	sources := make([]GeodataSource, 0, len(geofileAllowlist))
+	for _, entry := range geofileAllowlist {
+		sources = append(sources, GeodataSource{URL: entry.latestURL(), File: entry.FileName})
+	}
+	slices.SortFunc(sources, func(a, b GeodataSource) int { return strings.Compare(a.File, b.File) })
+	return sources
+}
+
+func (entry geofileEntry) latestURL() string {
+	return entry.Repo + "/releases/latest/download/" + entry.Asset
+}
+
+func (entry geofileEntry) taggedURL(tag string) string {
+	return entry.Repo + "/releases/download/" + tag + "/" + entry.Asset
+}
+
+// stagedGeofile is a verified download waiting to be moved into the asset folder.
+type stagedGeofile struct {
+	destPath  string
+	stagePath string
+}
+
+// restartXrayAfterGeofileUpdate is a seam: tests assert that an update which
+// installed nothing also restarted nothing.
+var restartXrayAfterGeofileUpdate = (*ServerService).RestartXrayService
+
+func (s *ServerService) UpdateGeofile(fileName string) error {
 	// Strict allowlist check to avoid writing uncontrolled files
 	if fileName != "" {
 		if _, ok := geofileAllowlist[fileName]; !ok {
@@ -1708,96 +2244,54 @@ func (s *ServerService) UpdateGeofile(fileName string) error {
 		}
 	}
 
+	wanted := geofileAllowlist
+	if fileName != "" {
+		wanted = map[string]geofileEntry{fileName: geofileAllowlist[fileName]}
+	}
+
+	// Atomic per upstream, not across all six: one release's databases belong
+	// together, but a failing repo must not discard another repo's good files.
+	byRepo := make(map[string][]geofileEntry, len(wanted))
+	for _, entry := range wanted {
+		byRepo[entry.Repo] = append(byRepo[entry.Repo], entry)
+	}
+	repos := slices.Sorted(maps.Keys(byRepo))
+
+	binFolder := config.GetBinFolderPath()
+	stageDir, err := os.MkdirTemp(binFolder, "geofile-")
+	if err != nil {
+		return common.NewErrorf("Failed to create staging folder for Geofiles: %v", err)
+	}
+	defer os.RemoveAll(stageDir)
+
 	client := s.settingService.NewProxiedHTTPClient(0)
 
-	downloadFile := func(url, destPath string) error {
-		var req *http.Request
-		req, err := http.NewRequest("GET", url, nil)
-		if err != nil {
-			return common.NewErrorf("Failed to create HTTP request for %s: %v", url, err)
-		}
-
-		var localFileModTime time.Time
-		if fileInfo, err := os.Stat(destPath); err == nil {
-			localFileModTime = fileInfo.ModTime()
-			if !localFileModTime.IsZero() {
-				req.Header.Set("If-Modified-Since", localFileModTime.UTC().Format(http.TimeFormat))
-			}
-		}
-
-		resp, err := client.Do(req)
-		if err != nil {
-			return common.NewErrorf("Failed to download Geofile from %s: %v", url, err)
-		}
-		defer resp.Body.Close()
-
-		// Parse Last-Modified header from server
-		var serverModTime time.Time
-		serverModTimeStr := resp.Header.Get("Last-Modified")
-		if serverModTimeStr != "" {
-			parsedTime, err := time.Parse(http.TimeFormat, serverModTimeStr)
-			if err != nil {
-				logger.Warningf("Failed to parse Last-Modified header for %s: %v", url, err)
-			} else {
-				serverModTime = parsedTime
-			}
-		}
-
-		// Function to update local file's modification time
-		updateFileModTime := func() {
-			if !serverModTime.IsZero() {
-				if err := os.Chtimes(destPath, serverModTime, serverModTime); err != nil {
-					logger.Warningf("Failed to update modification time for %s: %v", destPath, err)
-				}
-			}
-		}
-
-		// Handle 304 Not Modified
-		if resp.StatusCode == http.StatusNotModified {
-			updateFileModTime()
-			return nil
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			return common.NewErrorf("Failed to download Geofile from %s: received status code %d", url, resp.StatusCode)
-		}
-
-		file, err := os.Create(destPath)
-		if err != nil {
-			return common.NewErrorf("Failed to create Geofile %s: %v", destPath, err)
-		}
-		defer file.Close()
-
-		_, err = io.Copy(file, resp.Body)
-		if err != nil {
-			return common.NewErrorf("Failed to save Geofile %s: %v", destPath, err)
-		}
-
-		updateFileModTime()
-		return nil
-	}
-
 	var errorMessages []string
+	installed := 0
+	for _, repo := range repos {
+		entries := byRepo[repo]
+		slices.SortFunc(entries, func(a, b geofileEntry) int { return strings.Compare(a.FileName, b.FileName) })
 
-	if fileName == "" {
-		// Download all geofiles
-		for _, entry := range geofileAllowlist {
-			destPath := filepath.Join(config.GetBinFolderPath(), entry.FileName)
-			if err := downloadFile(entry.URL, destPath); err != nil {
-				errorMessages = append(errorMessages, fmt.Sprintf("Error downloading Geofile '%s': %v", entry.FileName, err))
-			}
+		staged, err := s.stageGeofileRelease(client, entries, binFolder, stageDir)
+		if err != nil {
+			errorMessages = append(errorMessages, err.Error())
+			continue
 		}
-	} else {
-		entry := geofileAllowlist[fileName]
-		destPath := filepath.Join(config.GetBinFolderPath(), entry.FileName)
-		if err := downloadFile(entry.URL, destPath); err != nil {
-			errorMessages = append(errorMessages, fmt.Sprintf("Error downloading Geofile '%s': %v", entry.FileName, err))
+		for _, file := range staged {
+			if err := os.Rename(file.stagePath, file.destPath); err != nil {
+				errorMessages = append(errorMessages, fmt.Sprintf("Failed to install Geofile %s: %v", file.destPath, err))
+				continue
+			}
+			installed++
 		}
 	}
 
-	err := s.RestartXrayService()
-	if err != nil {
-		errorMessages = append(errorMessages, fmt.Sprintf("Updated Geofile '%s' but Failed to start Xray: %v", fileName, err))
+	// Nothing changed, so there is no reason to restart the core and drop every
+	// client connection.
+	if installed > 0 {
+		if err := restartXrayAfterGeofileUpdate(s); err != nil {
+			errorMessages = append(errorMessages, fmt.Sprintf("Updated Geofiles but Failed to start Xray: %v", err))
+		}
 	}
 
 	if len(errorMessages) > 0 {
@@ -1807,9 +2301,212 @@ func (s *ServerService) UpdateGeofile(fileName string) error {
 	return nil
 }
 
+// stageGeofileRelease downloads one upstream's databases and verifies each
+// against a digest from the same release, staging all of them or none.
+func (s *ServerService) stageGeofileRelease(client *http.Client, entries []geofileEntry, binFolder, stageDir string) ([]stagedGeofile, error) {
+	// Resolve "latest" once. These upstreams publish several times a day, and a
+	// release landing mid-batch would check one release's digest against another's bytes.
+	tag, err := resolveGeofileTag(client, entries[0].latestURL())
+	if err != nil {
+		return nil, common.NewErrorf("Error resolving Geofile release from %s: %v", entries[0].Repo, err)
+	}
+
+	var staged []stagedGeofile
+	for _, entry := range entries {
+		destPath := filepath.Join(binFolder, entry.FileName)
+		stagePath := filepath.Join(stageDir, entry.FileName)
+		changed, err := s.stageGeofile(client, entry, tag, destPath, stagePath)
+		if err != nil {
+			return nil, common.NewErrorf("Error downloading Geofile '%s': %v", entry.FileName, err)
+		}
+		if changed {
+			staged = append(staged, stagedGeofile{destPath: destPath, stagePath: stagePath})
+		}
+	}
+	return staged, nil
+}
+
+// resolveGeofileTag reads the immutable release tag a `latest` download
+// redirects to, so the asset and its digest cannot come from two releases.
+func resolveGeofileTag(client *http.Client, latestURL string) (string, error) {
+	pinned := *client
+	pinned.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, latestURL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := pinned.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	location := resp.Header.Get("Location")
+	if location == "" {
+		return "", common.NewErrorf("expected a redirect to a tagged release, got HTTP %d", resp.StatusCode)
+	}
+	return geofileTagFromLocation(location)
+}
+
+// geofileTagFromLocation pulls <tag> out of a .../releases/download/<tag>/<asset>
+// redirect target.
+func geofileTagFromLocation(location string) (string, error) {
+	const marker = "/releases/download/"
+	_, after, ok := strings.Cut(location, marker)
+	if !ok {
+		return "", common.NewErrorf("unexpected release redirect %q", location)
+	}
+	tag, _, found := strings.Cut(after, "/")
+	if !found || tag == "" {
+		return "", common.NewErrorf("unexpected release redirect %q", location)
+	}
+	return tag, nil
+}
+
+// stageGeofile downloads one database into stagePath and checks it against the
+// SHA-256 its upstream publishes. It reports false on 304, staging nothing.
+func (s *ServerService) stageGeofile(client *http.Client, entry geofileEntry, tag, destPath, stagePath string) (bool, error) {
+	assetURL := entry.taggedURL(tag)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, assetURL, nil)
+	if err != nil {
+		return false, common.NewErrorf("Failed to create HTTP request for %s: %v", assetURL, err)
+	}
+
+	if fileInfo, err := os.Stat(destPath); err == nil {
+		if localFileModTime := fileInfo.ModTime(); !localFileModTime.IsZero() {
+			req.Header.Set("If-Modified-Since", localFileModTime.UTC().Format(http.TimeFormat))
+		}
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, common.NewErrorf("Failed to download Geofile from %s: %v", assetURL, err)
+	}
+	defer resp.Body.Close()
+
+	// Parse Last-Modified header from server
+	var serverModTime time.Time
+	if serverModTimeStr := resp.Header.Get("Last-Modified"); serverModTimeStr != "" {
+		parsedTime, err := time.Parse(http.TimeFormat, serverModTimeStr)
+		if err != nil {
+			logger.Warningf("Failed to parse Last-Modified header for %s: %v", assetURL, err)
+		} else {
+			serverModTime = parsedTime
+		}
+	}
+
+	// The conditional GET above reads this back, so it must survive the rename.
+	setModTime := func(target string) {
+		if !serverModTime.IsZero() {
+			if err := os.Chtimes(target, serverModTime, serverModTime); err != nil {
+				logger.Warningf("Failed to update modification time for %s: %v", target, err)
+			}
+		}
+	}
+
+	// Handle 304 Not Modified
+	if resp.StatusCode == http.StatusNotModified {
+		setModTime(destPath)
+		return false, nil
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return false, common.NewErrorf("Failed to download Geofile from %s: received status code %d", assetURL, resp.StatusCode)
+	}
+
+	file, err := os.Create(stagePath)
+	if err != nil {
+		return false, common.NewErrorf("Failed to create Geofile %s: %v", stagePath, err)
+	}
+	hasher := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(file, hasher), resp.Body); err != nil {
+		file.Close()
+		return false, common.NewErrorf("Failed to save Geofile %s: %v", stagePath, err)
+	}
+	if err := file.Close(); err != nil {
+		return false, common.NewErrorf("Failed to save Geofile %s: %v", stagePath, err)
+	}
+
+	// TLS protects the transport, not the artifact. Xray parses these databases
+	// when it builds its routing matchers, so a bad one takes the core down.
+	want, err := s.fetchGeofileDigest(client, assetURL+".sha256sum", entry.Asset)
+	if err != nil {
+		return false, err
+	}
+	if got := hex.EncodeToString(hasher.Sum(nil)); !strings.EqualFold(got, want) {
+		return false, common.NewErrorf("does not match the published SHA-256 checksum, so the download is corrupted or has been tampered with (expected %s, got %s)", want, got)
+	}
+
+	setModTime(stagePath)
+	return true, nil
+}
+
+// fetchGeofileDigest downloads the .sha256sum sidecar published beside a geo
+// database and returns the digest it lists for assetName.
+func (s *ServerService) fetchGeofileDigest(client *http.Client, sumsURL, assetName string) (string, error) {
+	req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, sumsURL, nil)
+	if reqErr != nil {
+		return "", fmt.Errorf("download geofile checksum: %w", reqErr)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("download geofile checksum: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download geofile checksum: unexpected HTTP %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxXrayDigestBytes))
+	if err != nil {
+		return "", fmt.Errorf("download geofile checksum: %w", err)
+	}
+	return parseGeofileDigest(raw, assetName)
+}
+
+// parseGeofileDigest returns the SHA-256 hex a sidecar lists for assetName,
+// matching on base name since upstreams record "geoip.dat" or "release/geoip.dat".
+func parseGeofileDigest(sums []byte, assetName string) (string, error) {
+	for line := range strings.SplitSeq(string(sums), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		// A leading "*" is sha256sum's own binary-mode marker, not part of the name.
+		if path.Base(strings.TrimPrefix(fields[1], "*")) != assetName {
+			continue
+		}
+		digest := strings.ToLower(fields[0])
+		if _, err := hex.DecodeString(digest); err != nil || len(digest) != sha256.Size*2 {
+			return "", fmt.Errorf("geofile checksum: malformed SHA-256 entry for %s", assetName)
+		}
+		return digest, nil
+	}
+	return "", fmt.Errorf("geofile checksum: no SHA-256 entry for %s", assetName)
+}
+
+// parseXrayKeyPairOutput reads the two-line "Label: value" output that xray's
+// key-generation subcommands (x25519, mldsa65, mlkem768) print and returns the
+// two values. Short or label-less output yields an error instead of panicking
+// on an out-of-range slice index, so a future xray version that changes the
+// format degrades to a 500 with a message rather than a crash.
+func parseXrayKeyPairOutput(output string) (string, string, error) {
+	lines := strings.Split(output, "\n")
+	if len(lines) < 2 {
+		return "", "", common.NewError("unexpected key generator output")
+	}
+	first := strings.Split(lines[0], ":")
+	second := strings.Split(lines[1], ":")
+	if len(first) < 2 || len(second) < 2 {
+		return "", "", common.NewError("unexpected key generator output")
+	}
+	return strings.TrimSpace(first[1]), strings.TrimSpace(second[1]), nil
+}
+
 func (s *ServerService) GetNewX25519Cert() (any, error) {
 	// Run the command
-	cmd := exec.Command(xray.GetBinaryPath(), "x25519")
+	cmd := exec.CommandContext(context.Background(), xray.GetBinaryPath(), "x25519")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	err := cmd.Run()
@@ -1817,13 +2514,10 @@ func (s *ServerService) GetNewX25519Cert() (any, error) {
 		return nil, err
 	}
 
-	lines := strings.Split(out.String(), "\n")
-
-	privateKeyLine := strings.Split(lines[0], ":")
-	publicKeyLine := strings.Split(lines[1], ":")
-
-	privateKey := strings.TrimSpace(privateKeyLine[1])
-	publicKey := strings.TrimSpace(publicKeyLine[1])
+	privateKey, publicKey, err := parseXrayKeyPairOutput(out.String())
+	if err != nil {
+		return nil, err
+	}
 
 	keyPair := map[string]any{
 		"privateKey": privateKey,
@@ -1833,9 +2527,9 @@ func (s *ServerService) GetNewX25519Cert() (any, error) {
 	return keyPair, nil
 }
 
-func (s *ServerService) GetNewmldsa65() (any, error) {
+func (s *ServerService) GetNewmldsa65() (*MLDSA65Response, error) {
 	// Run the command
-	cmd := exec.Command(xray.GetBinaryPath(), "mldsa65")
+	cmd := exec.CommandContext(context.Background(), xray.GetBinaryPath(), "mldsa65")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	err := cmd.Run()
@@ -1843,17 +2537,14 @@ func (s *ServerService) GetNewmldsa65() (any, error) {
 		return nil, err
 	}
 
-	lines := strings.Split(out.String(), "\n")
+	seed, verify, err := parseXrayKeyPairOutput(out.String())
+	if err != nil {
+		return nil, err
+	}
 
-	SeedLine := strings.Split(lines[0], ":")
-	VerifyLine := strings.Split(lines[1], ":")
-
-	seed := strings.TrimSpace(SeedLine[1])
-	verify := strings.TrimSpace(VerifyLine[1])
-
-	keyPair := map[string]any{
-		"seed":   seed,
-		"verify": verify,
+	keyPair := &MLDSA65Response{
+		Seed:   seed,
+		Verify: verify,
 	}
 
 	return keyPair, nil
@@ -2039,7 +2730,7 @@ func (s *ServerService) GetRemoteCertHash(server string) ([]string, error) {
 
 func (s *ServerService) GetNewEchCert(sni string) (any, error) {
 	// Run the command
-	cmd := exec.Command(xray.GetBinaryPath(), "tls", "ech", "--serverName", sni)
+	cmd := exec.CommandContext(context.Background(), xray.GetBinaryPath(), "tls", "ech", "--serverName", sni)
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	err := cmd.Run()
@@ -2062,16 +2753,39 @@ func (s *ServerService) GetNewEchCert(sni string) (any, error) {
 }
 
 func (s *ServerService) GetNewVlessEnc() (any, error) {
-	cmd := exec.Command(xray.GetBinaryPath(), "vlessenc")
+	cmd := exec.CommandContext(context.Background(), xray.GetBinaryPath(), "vlessenc")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
 		return nil, err
 	}
 
+	auths := parseVlessEncAuths(out.String())
+	auths = append(auths, deriveVlessEncModes(auths)...)
+
 	return map[string]any{
-		"auths": parseVlessEncAuths(out.String()),
+		"auths": auths,
 	}, nil
+}
+
+func deriveVlessEncModes(auths []map[string]string) []map[string]string {
+	var extra []map[string]string
+	for _, a := range auths {
+		for _, mode := range []string{"xorpub", "random"} {
+			dec := strings.Replace(a["decryption"], ".native.", "."+mode+".", 1)
+			enc := strings.Replace(a["encryption"], ".native.", "."+mode+".", 1)
+			if dec == a["decryption"] && enc == a["encryption"] {
+				continue
+			}
+			extra = append(extra, map[string]string{
+				"id":         a["id"] + "_" + mode,
+				"label":      a["label"] + " (" + mode + ")",
+				"decryption": dec,
+				"encryption": enc,
+			})
+		}
+	}
+	return extra
 }
 
 func parseVlessEncAuths(output string) []map[string]string {
@@ -2121,20 +2835,20 @@ func vlessEncAuthID(label string) string {
 	}
 }
 
-func (s *ServerService) GetNewUUID() (map[string]string, error) {
+func (s *ServerService) GetNewUUID() (*NewUUIDResponse, error) {
 	newUUID, err := uuid.NewRandom()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate UUID: %w", err)
 	}
 
-	return map[string]string{
-		"uuid": newUUID.String(),
+	return &NewUUIDResponse{
+		UUID: newUUID.String(),
 	}, nil
 }
 
-func (s *ServerService) GetNewmlkem768() (any, error) {
+func (s *ServerService) GetNewmlkem768() (*MLKEM768Response, error) {
 	// Run the command
-	cmd := exec.Command(xray.GetBinaryPath(), "mlkem768")
+	cmd := exec.CommandContext(context.Background(), xray.GetBinaryPath(), "mlkem768")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	err := cmd.Run()
@@ -2142,17 +2856,14 @@ func (s *ServerService) GetNewmlkem768() (any, error) {
 		return nil, err
 	}
 
-	lines := strings.Split(out.String(), "\n")
+	seed, client, err := parseXrayKeyPairOutput(out.String())
+	if err != nil {
+		return nil, err
+	}
 
-	SeedLine := strings.Split(lines[0], ":")
-	ClientLine := strings.Split(lines[1], ":")
-
-	seed := strings.TrimSpace(SeedLine[1])
-	client := strings.TrimSpace(ClientLine[1])
-
-	keyPair := map[string]any{
-		"seed":   seed,
-		"client": client,
+	keyPair := &MLKEM768Response{
+		Seed:   seed,
+		Client: client,
 	}
 
 	return keyPair, nil

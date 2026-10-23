@@ -174,6 +174,7 @@ export default function AttachClientsModal({
         <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
           <Input.Search
             allowClear
+            aria-label={t('search')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder={t('pages.inbounds.attachClientsSearchPlaceholder')}
@@ -202,16 +203,17 @@ export default function AttachClientsModal({
       </Space>
 
       {targetOptions.length === 0 ? (
-        <Alert type="info" showIcon message={t('pages.inbounds.attachClientsNoTargets')} />
+        <Alert type="info" showIcon title={t('pages.inbounds.attachClientsNoTargets')} />
       ) : (
         <Select
           mode="multiple"
+          aria-label={t('pages.inbounds.attachClientsTargets')}
           style={{ width: '100%' }}
           value={targetIds}
           onChange={setTargetIds}
           options={targetOptions}
           placeholder={t('pages.inbounds.attachClientsTargets')}
-          optionFilterProp="label"
+          showSearch={{ optionFilterProp: 'label' }}
         />
       )}
     </Modal>

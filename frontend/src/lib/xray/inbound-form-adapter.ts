@@ -1,19 +1,28 @@
-import type { InboundFormValues, ShareAddrStrategy, TrafficReset } from '@/schemas/forms/inbound-form';
+import type {
+  InboundFormValues,
+  ShareAddrStrategy,
+  TrafficReset,
+} from '@/schemas/forms/inbound-form';
 import type { InboundSettings } from '@/schemas/protocols/inbound';
 import {
+  AmneziawgClientSchema,
   HysteriaClientSchema,
+  MtprotoClientSchema,
   ShadowsocksClientSchema,
   TrojanClientSchema,
+  TuicClientSchema,
   VlessClientSchema,
   VmessClientSchema,
+  WireguardClientSchema,
 } from '@/schemas/protocols/inbound';
 import type { StreamSettings } from '@/schemas/api/inbound';
 import type { Sniffing } from '@/schemas/primitives';
 import type { z } from 'zod';
 import { normalizeStreamSettingsForWire } from '@/lib/xray/stream-wire-normalize';
 import { canEnableSniffing } from '@/lib/xray/protocol-capabilities';
+import { tlsCertUsesFiles } from '@/schemas/protocols/security/tls';
 import { SockoptStreamSettingsSchema } from '@/schemas/protocols/stream/sockopt';
-import { XHttpXmuxSchema } from '@/schemas/protocols/stream/xhttp';
+import { XHttpStreamSettingsSchema, XHttpXmuxSchema } from '@/schemas/protocols/stream/xhttp';
 
 const XMUX_DEFAULTS = XHttpXmuxSchema.parse({});
 
@@ -39,12 +48,13 @@ export interface RawInboundRow {
   enable?: boolean;
   expiryTime?: number;
   trafficReset?: string;
+  trafficResetDay?: number;
   lastTrafficResetTime?: number;
   nodeId?: number | null;
   shareAddrStrategy?: string;
   shareAddr?: string;
   subSortIndex?: number;
-  trafficMultiplier?: number;
+  disableFlow?: boolean;
   clientStats?: unknown;
 }
 
@@ -59,6 +69,7 @@ export interface WireInboundPayload {
   enable: boolean;
   expiryTime: number;
   trafficReset: TrafficReset;
+  trafficResetDay: number;
   lastTrafficResetTime: number;
   listen: string;
   port: number;
@@ -72,7 +83,7 @@ export interface WireInboundPayload {
   shareAddrStrategy: ShareAddrStrategy;
   shareAddr: string;
   subSortIndex: number;
-  trafficMultiplier: number;
+  disableFlow: boolean;
 }
 
 function coerceJsonObject(value: unknown): Record<string, unknown> {
@@ -125,6 +136,10 @@ const NETWORK_SETTINGS_KEY: Record<string, string> = {
 };
 
 function healStreamNetworkKey(stream: Record<string, unknown>): void {
+  if (typeof stream.method === 'string' && stream.method !== '') {
+    stream.network = stream.method;
+  }
+  delete stream.method;
   const network = typeof stream.network === 'string' ? stream.network : '';
   const key = NETWORK_SETTINGS_KEY[network];
   if (!key) return;
@@ -135,18 +150,11 @@ function healStreamNetworkKey(stream: Record<string, unknown>): void {
 
 function tlsCerts(stream: Record<string, unknown>): Record<string, unknown>[] {
   const tls = stream.tlsSettings as { certificates?: unknown } | undefined;
-  return Array.isArray(tls?.certificates) ? tls.certificates as Record<string, unknown>[] : [];
+  return Array.isArray(tls?.certificates) ? (tls.certificates as Record<string, unknown>[]) : [];
 }
 
 function synthesizeTlsCertUseFile(stream: Record<string, unknown>): void {
-  for (const c of tlsCerts(stream)) {
-    if (typeof c.useFile === 'boolean') continue;
-    const hasFile = !!c.certificateFile || !!c.keyFile;
-    const hasInline =
-      (Array.isArray(c.certificate) && c.certificate.length > 0) ||
-      (Array.isArray(c.key) && c.key.length > 0);
-    c.useFile = hasFile || !hasInline;
-  }
+  for (const c of tlsCerts(stream)) c.useFile = tlsCertUsesFiles(c);
 }
 
 function stripTlsCertUseFile(stream: Record<string, unknown>): void {
@@ -157,32 +165,36 @@ export function rawInboundToFormValues(row: RawInboundRow): InboundFormValues {
   const protocol = (row.protocol || 'vless') as InboundSettings['protocol'];
   const settings = coerceJsonObject(row.settings) as InboundSettings['settings'];
   const rawStream = coerceJsonObject(row.streamSettings);
-  const streamSettings = Object.keys(rawStream).length > 0
-    ? (rawStream as StreamSettings)
-    : undefined;
+  const streamSettings =
+    Object.keys(rawStream).length > 0 ? (rawStream as StreamSettings) : undefined;
   if (streamSettings) {
     healStreamNetworkKey(streamSettings as unknown as Record<string, unknown>);
     synthesizeTlsCertUseFile(streamSettings as unknown as Record<string, unknown>);
     const streamRecord = streamSettings as unknown as Record<string, unknown>;
-    // A sockopt object saved before a control existed is missing that key, so
-    // its Select renders blank and picking the default does not help — the
-    // wire normalizer drops default values, recreating the gap on the next
-    // edit. Re-parsing through the schema fills absent keys with their
-    // defaults, mirroring the xhttpSettings handling below.
-    const so = streamRecord.sockopt;
-    if (so && typeof so === 'object' && !Array.isArray(so)) {
-      const parsed = SockoptStreamSettingsSchema.safeParse(so);
-      if (parsed.success) {
-        streamRecord.sockopt = { ...(so as Record<string, unknown>), ...parsed.data };
-      }
-    }
     const xh = streamRecord.xhttpSettings;
     if (xh && typeof xh === 'object' && !Array.isArray(xh)) {
-      const xhttp = xh as Record<string, unknown>;
+      const parsed = XHttpStreamSettingsSchema.safeParse(xh);
+      const xhttp = (parsed.success ? parsed.data : xh) as Record<string, unknown>;
+      streamRecord.xhttpSettings = xhttp;
       const xmux = xhttp.xmux;
       if (xmux && typeof xmux === 'object' && !Array.isArray(xmux)) {
         xhttp.enableXmux = true;
         xhttp.xmux = { ...XMUX_DEFAULTS, ...(xmux as Record<string, unknown>) };
+      }
+    }
+    const so = streamRecord.sockopt;
+    if (so && typeof so === 'object' && !Array.isArray(so)) {
+      const raw = { ...(so as Record<string, unknown>) };
+      // Imported/API configs may use lowercase v6only; the form key is V6Only.
+      if ('v6only' in raw) {
+        if (!('V6Only' in raw)) raw.V6Only = Boolean(raw.v6only);
+        delete raw.v6only;
+      }
+      const parsed = SockoptStreamSettingsSchema.safeParse(raw);
+      if (parsed.success) {
+        streamRecord.sockopt = { ...raw, ...parsed.data };
+      } else {
+        streamRecord.sockopt = raw;
       }
     }
   }
@@ -201,14 +213,13 @@ export function rawInboundToFormValues(row: RawInboundRow): InboundFormValues {
     down: row.down ?? 0,
     total: row.total ?? 0,
     trafficReset: coerceTrafficReset(row.trafficReset),
+    trafficResetDay: Math.min(31, Math.max(1, row.trafficResetDay ?? 1)),
     lastTrafficResetTime: row.lastTrafficResetTime ?? 0,
     nodeId: row.nodeId ?? null,
     shareAddrStrategy: coerceShareAddrStrategy(row.shareAddrStrategy),
     shareAddr: row.shareAddr ?? '',
-    // 0 is what a row created before the column existed carries; it means
-    // "count traffic as measured", same as 1.
-    trafficMultiplier: row.trafficMultiplier && row.trafficMultiplier > 0 ? row.trafficMultiplier : 1,
-    subSortIndex: Math.max(1, row.subSortIndex ?? 1),
+    subSortIndex: row.subSortIndex == null || row.subSortIndex === 0 ? 1 : row.subSortIndex,
+    disableFlow: row.disableFlow ?? false,
     protocol,
     settings,
   } as InboundFormValues;
@@ -247,12 +258,26 @@ export function pruneEmpty(value: unknown): unknown {
 // gives us the canonical projection.
 function clientSchemaForProtocol(protocol: string): z.ZodType | null {
   switch (protocol) {
-    case 'vless': return VlessClientSchema;
-    case 'vmess': return VmessClientSchema;
-    case 'trojan': return TrojanClientSchema;
-    case 'shadowsocks': return ShadowsocksClientSchema;
-    case 'hysteria': return HysteriaClientSchema;
-    default: return null;
+    case 'vless':
+      return VlessClientSchema;
+    case 'vmess':
+      return VmessClientSchema;
+    case 'trojan':
+      return TrojanClientSchema;
+    case 'shadowsocks':
+      return ShadowsocksClientSchema;
+    case 'hysteria':
+      return HysteriaClientSchema;
+    case 'wireguard':
+      return WireguardClientSchema;
+    case 'mtproto':
+      return MtprotoClientSchema;
+    case 'amneziawg':
+      return AmneziawgClientSchema;
+    case 'tuic':
+      return TuicClientSchema;
+    default:
+      return null;
   }
 }
 
@@ -299,7 +324,9 @@ export function dropLegacyOptionalEmpties(
     // sub-fields are empty; otherwise drop only the empty sub-arrays so
     // the wire payload doesn't carry a stray `"tcp": []` next to a
     // populated UDP mask list (and vice versa).
-    const fm = stream.finalmask as { tcp?: unknown[]; udp?: unknown[]; quicParams?: unknown } | undefined;
+    const fm = stream.finalmask as
+      | { tcp?: unknown[]; udp?: unknown[]; quicParams?: unknown }
+      | undefined;
     if (fm && typeof fm === 'object') {
       const hasTcp = Array.isArray(fm.tcp) && fm.tcp.length > 0;
       const hasUdp = Array.isArray(fm.udp) && fm.udp.length > 0;
@@ -344,6 +371,7 @@ export function formValuesToWirePayload(values: InboundFormValues): WireInboundP
     enable: values.enable,
     expiryTime: values.expiryTime,
     trafficReset: values.trafficReset,
+    trafficResetDay: values.trafficResetDay,
     lastTrafficResetTime: values.lastTrafficResetTime,
     listen: values.listen,
     port: values.port,
@@ -352,12 +380,14 @@ export function formValuesToWirePayload(values: InboundFormValues): WireInboundP
     streamSettings: streamPruned ? JSON.stringify(streamPruned) : '',
     // mtproto is mtg-served, not Xray, so sniffing never applies — emit empty
     // rather than the default { enabled: false } so the row carries no sniffing.
-    sniffing: canEnableSniffing({ protocol: values.protocol }) ? JSON.stringify(normalizeSniffing(values.sniffing)) : '',
+    sniffing: canEnableSniffing({ protocol: values.protocol })
+      ? JSON.stringify(normalizeSniffing(values.sniffing))
+      : '',
     tag: values.tag,
     shareAddrStrategy: values.shareAddrStrategy,
     shareAddr: values.shareAddr,
     subSortIndex: values.subSortIndex,
-    trafficMultiplier: values.trafficMultiplier > 0 ? values.trafficMultiplier : 1,
+    disableFlow: values.disableFlow,
   };
   if (values.nodeId != null) payload.nodeId = values.nodeId;
   return payload;

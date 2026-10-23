@@ -113,23 +113,7 @@ func (a *IndexController) login(c *gin.Context) {
 	}
 
 	defaultLoginLimiter.registerSuccess(remoteIP, form.Username)
-
-	// Block disabled accounts AFTER credentials check (so the message only ever
-	// reaches the real owner of valid credentials, never an attacker probing).
-	if user.Disabled {
-		logger.Warningf("blocked login for disabled account: username=%q, IP=%q", safeUser, remoteIP)
-		a.tgbot.UserLoginNotify(tgbot.LoginAttempt{
-			Username: safeUser,
-			IP:       remoteIP,
-			Time:     timeStr,
-			Status:   tgbot.LoginFail,
-			Reason:   "account disabled",
-		})
-		pureJsonMsg(c, http.StatusOK, false, I18nWeb(c, "pages.login.toasts.accountDisabled"))
-		return
-	}
-
-	logger.Infof("%s logged in successfully, Ip Address: %s\n", safeUser, remoteIP)
+	logger.Infof("logged in successfully: username=%q, IP=%q", form.Username, remoteIP)
 	a.tgbot.UserLoginNotify(tgbot.LoginAttempt{
 		Username: safeUser,
 		IP:       remoteIP,

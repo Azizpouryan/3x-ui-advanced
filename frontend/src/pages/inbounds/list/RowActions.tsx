@@ -13,7 +13,6 @@ import {
   TagsOutlined,
   UsergroupAddOutlined,
   UsergroupDeleteOutlined,
-  UserDeleteOutlined,
 } from '@ant-design/icons';
 
 import { isInboundMultiUser, showQrCodeMenu } from './helpers';
@@ -23,15 +22,25 @@ interface RowActionsMenuProps {
   record: DBInboundRecord;
   subEnable: boolean;
   hasClients: boolean;
-  depletedCount?: number;
   onClick: (key: RowAction) => void;
   isMobile?: boolean;
-  readOnly?: boolean;
 }
 
-export function buildRowActionsMenu({ record, subEnable, t, isMobile, hasClients, depletedCount = 0, readOnly }: { record: DBInboundRecord; subEnable: boolean; t: (k: string) => string; isMobile?: boolean; hasClients?: boolean; depletedCount?: number; readOnly?: boolean }): MenuProps['items'] {
+export function buildRowActionsMenu({
+  record,
+  subEnable,
+  t,
+  isMobile,
+  hasClients,
+}: {
+  record: DBInboundRecord;
+  subEnable: boolean;
+  t: (k: string) => string;
+  isMobile?: boolean;
+  hasClients?: boolean;
+}): MenuProps['items'] {
   const items: MenuProps['items'] = [];
-  if (isMobile && !readOnly) {
+  if (isMobile) {
     items.push({ key: 'edit', icon: <EditOutlined />, label: t('edit') });
   }
   if (showQrCodeMenu(record)) {
@@ -47,36 +56,53 @@ export function buildRowActionsMenu({ record, subEnable, t, isMobile, hasClients
       });
     }
   } else {
-    items.push({ key: 'showInfo', icon: <InfoCircleOutlined />, label: t('pages.inbounds.inboundInfo') });
+    items.push({
+      key: 'showInfo',
+      icon: <InfoCircleOutlined />,
+      label: t('pages.inbounds.inboundInfo'),
+    });
   }
-  items.push({ key: 'clipboard', icon: <CopyOutlined />, label: t('pages.inbounds.exportInbound') });
-  // Read-only roles (reseller) may view/export but cannot modify, reset,
-  // attach/detach, clone, or delete inbounds.
-  if (readOnly) {
-    return items;
-  }
-  items.push({ key: 'resetTraffic', icon: <RetweetOutlined />, label: t('pages.inbounds.resetTraffic') });
+  items.push({
+    key: 'clipboard',
+    icon: <CopyOutlined />,
+    label: t('pages.inbounds.exportInbound'),
+  });
+  items.push({
+    key: 'resetTraffic',
+    icon: <RetweetOutlined />,
+    label: t('pages.inbounds.resetTraffic'),
+  });
   items.push({ key: 'clone', icon: <BlockOutlined />, label: t('pages.inbounds.clone') });
   if (isInboundMultiUser(record)) {
-    items.push({ key: 'attachExisting', icon: <UsergroupAddOutlined />, label: t('pages.inbounds.attachExistingClients') });
+    items.push({
+      key: 'attachExisting',
+      icon: <UsergroupAddOutlined />,
+      label: t('pages.inbounds.attachExistingClients'),
+    });
   }
   if (isInboundMultiUser(record) && hasClients) {
-    items.push({ key: 'attachClients', icon: <UsergroupAddOutlined />, label: t('pages.inbounds.attachClients') });
-    items.push({ key: 'detachClients', icon: <UsergroupDeleteOutlined />, label: t('pages.inbounds.detachClients') });
-    items.push({ key: 'addToGroup', icon: <TagsOutlined />, label: t('pages.inbounds.addClientsToGroup') });
-    items.push({ type: 'divider' });
-    // Count comes from the list rollup, which only classifies clients on an
-    // enabled inbound — so it is a hint for the label, never a gate. The
-    // server recomputes the ended set when the action runs.
     items.push({
-      key: 'delDepletedClients',
-      icon: <UserDeleteOutlined />,
-      danger: true,
-      label: depletedCount > 0
-        ? `${t('pages.inbounds.delDepletedClients')} (${depletedCount})`
-        : t('pages.inbounds.delDepletedClients'),
+      key: 'attachClients',
+      icon: <UsergroupAddOutlined />,
+      label: t('pages.inbounds.attachClients'),
     });
-    items.push({ key: 'delAllClients', icon: <UsergroupDeleteOutlined />, danger: true, label: t('pages.inbounds.delAllClients') });
+    items.push({
+      key: 'detachClients',
+      icon: <UsergroupDeleteOutlined />,
+      label: t('pages.inbounds.detachClients'),
+    });
+    items.push({
+      key: 'addToGroup',
+      icon: <TagsOutlined />,
+      label: t('pages.inbounds.addClientsToGroup'),
+    });
+    items.push({ type: 'divider' });
+    items.push({
+      key: 'delAllClients',
+      icon: <UsergroupDeleteOutlined />,
+      danger: true,
+      label: t('pages.inbounds.delAllClients'),
+    });
   } else {
     items.push({ type: 'divider' });
   }
@@ -84,21 +110,32 @@ export function buildRowActionsMenu({ record, subEnable, t, isMobile, hasClients
   return items;
 }
 
-export function RowActionsCell({ record, subEnable, hasClients, depletedCount, onClick, readOnly }: RowActionsMenuProps) {
+export function RowActionsCell({ record, subEnable, hasClients, onClick }: RowActionsMenuProps) {
   const { t } = useTranslation();
   return (
     <div className="action-buttons">
-      {!readOnly && (
-        <Button type="text" size="small" style={{ fontSize: 16 }} icon={<EditOutlined />} onClick={() => onClick('edit')} />
-      )}
+      <Button
+        type="text"
+        size="small"
+        style={{ fontSize: 16 }}
+        icon={<EditOutlined />}
+        aria-label={t('edit')}
+        onClick={() => onClick('edit')}
+      />
       <Dropdown
         trigger={['click']}
         menu={{
-          items: buildRowActionsMenu({ record, subEnable, t, hasClients, depletedCount, readOnly }),
+          items: buildRowActionsMenu({ record, subEnable, t, hasClients }),
           onClick: ({ key }) => onClick(key as RowAction),
         }}
       >
-        <Button type="text" size="small" style={{ fontSize: 16 }} icon={<MoreOutlined />} />
+        <Button
+          type="text"
+          size="small"
+          style={{ fontSize: 16 }}
+          icon={<MoreOutlined />}
+          aria-label={t('more')}
+        />
       </Dropdown>
     </div>
   );

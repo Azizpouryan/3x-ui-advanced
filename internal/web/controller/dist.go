@@ -2,11 +2,10 @@ package controller
 
 import (
 	"bytes"
-	"embed"
 	"encoding/json"
 	htmlpkg "html"
+	"io/fs"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -15,14 +14,14 @@ import (
 	"github.com/mhsanaei/3x-ui/v3/internal/config"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
-	"github.com/mhsanaei/3x-ui/v3/internal/web/service"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/session"
+	"github.com/mhsanaei/3x-ui/v3/internal/web/service"
 )
 
-var distFS embed.FS
+var distFS fs.FS
 
-func SetDistFS(fs embed.FS) {
-	distFS = fs
+func SetDistFS(fsys fs.FS) {
+	distFS = fsys
 }
 
 var distPageBuildTime = time.Now()
@@ -33,7 +32,7 @@ var distPageBuildTime = time.Now()
 // produced at frontend build time by scripts/build-openapi.mjs and
 // embedded into the binary via the dist FS.
 func ServeOpenAPISpec(c *gin.Context) {
-	body, err := distFS.ReadFile("dist/openapi.json")
+	body, err := fs.ReadFile(distFS, "dist/openapi.json")
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "msg": "openapi.json not found"})
 		return
@@ -97,7 +96,7 @@ func pwaHeadInjection(basePath, pageName string) []byte {
 }
 
 func serveDistPage(c *gin.Context, name string) {
-	body, err := distFS.ReadFile("dist/" + name)
+	body, err := fs.ReadFile(distFS, "dist/"+name)
 	if err != nil {
 		c.String(http.StatusInternalServerError, "missing embedded page: %s", name)
 		return
@@ -135,25 +134,18 @@ func serveDistPage(c *gin.Context, name string) {
 	if nonce := c.GetString("csp_nonce"); nonce != "" {
 		nonceAttr = ` nonce="` + htmlpkg.EscapeString(nonce) + `"`
 	}
-	script := `<script` + nonceAttr + `>window.X_UI_BASE_PATH="` + escapedBase + `"`
+	script := `<script data-cfasync="false"` + nonceAttr + `>window.X_UI_BASE_PATH="` + escapedBase + `"`
 	if name != "login.html" {
-		escapedVer := jsEscape.Replace(config.GetVersion())
+		escapedVer := jsEscape.Replace(config.GetPanelVersion())
 		script += `;window.X_UI_CUR_VER="` + escapedVer + `"`
 		script += `;window.X_UI_DB_TYPE="` + config.GetDBKind() + `"`
-		// Expose the logged-in user's RBAC role so the SPA can hide menu
-		// items / actions the role can't use. Empty role (pre-RBAC session)
-		// is treated as super_admin to match the backend's HasRole rule.
-		role := "super_admin"
+
+		role := model.RoleSuperAdmin
 		if u := session.GetLoginUser(c); u != nil && u.Role != "" {
 			role = u.Role
 		}
 		script += `;window.X_UI_ROLE="` + jsEscape.Replace(role) + `"`
-		// Custom roles are named by the admin who created them, so the SPA gets
-		// the display name alongside the raw role key.
 		script += `;window.X_UI_ROLE_NAME="` + jsEscape.Replace(service.RoleDisplayName(role)) + `"`
-		// The permission set drives which menu entries and actions the SPA
-		// offers. It is a convenience for the UI only — every one of these is
-		// enforced again on the server.
 		perms := session.PermissionsOf(&model.User{Role: role})
 		granted := make([]string, 0, len(model.AllPermissions))
 		for _, p := range model.AllPermissions {
@@ -162,15 +154,6 @@ func serveDistPage(c *gin.Context, name string) {
 			}
 		}
 		script += `;window.X_UI_PERMS=[` + strings.Join(granted, ",") + `]`
-		// Whether per-client activity tracking is on, so the sidebar can offer
-		// the Client Activity entry only when there is something to show. Like
-		// the role/perms above this is page-load state — flipping the setting
-		// takes effect on the next load. Defaults to off on any read error.
-		activityOn := false
-		if v, err := (&service.SettingService{}).GetClientActivityEnable(); err == nil {
-			activityOn = v
-		}
-		script += `;window.X_UI_CLIENT_ACTIVITY=` + strconv.FormatBool(activityOn)
 	}
 	script += `;</script>`
 	inject := []byte(script)

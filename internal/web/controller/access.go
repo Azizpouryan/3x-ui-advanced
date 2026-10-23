@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/mhsanaei/3x-ui/v3/internal/database"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/service"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/session"
@@ -114,66 +115,85 @@ func resellerInboundSlice(c *gin.Context) (ids []int, ok bool) {
 // filterClientsForRole keeps only the clients attached to at least one inbound
 // the logged-in reseller is allowed to manage. No-op for other roles.
 func filterClientsForRole(c *gin.Context, rows []service.ClientWithAttachments) []service.ClientWithAttachments {
-	set, isReseller := resellerAllowedSet(c)
-	if !isReseller {
+	set, scoped := resellerAllowedSet(c)
+	if !scoped {
 		return rows
 	}
 	out := make([]service.ClientWithAttachments, 0, len(rows))
-	for _, r := range rows {
-		for _, id := range r.InboundIds {
-			if _, ok := set[id]; ok {
-				out = append(out, r)
+	for _, row := range rows {
+		if len(row.InboundIds) == 0 {
+			continue
+		}
+		allAllowed := true
+		for _, inboundID := range row.InboundIds {
+			if _, ok := set[inboundID]; !ok {
+				allAllowed = false
 				break
 			}
+		}
+		if allAllowed {
+			out = append(out, row)
 		}
 	}
 	return out
 }
 
+// scopeAllowsClientRecords requires at least one inbound association per client
+// and rejects the entire record if any attachment is outside the allowed set.
+func scopeAllowsClientRecords(set map[int]struct{}, records []model.ClientRecord) bool {
+	if len(records) == 0 {
+		return false
+	}
+	for _, record := range records {
+		var ids []int
+		if err := database.GetDB().Model(&model.ClientInbound{}).
+			Where("client_id = ?", record.Id).Pluck("inbound_id", &ids).Error; err != nil || len(ids) == 0 {
+			return false
+		}
+		for _, id := range ids {
+			if _, ok := set[id]; !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // guardClientEmailScope aborts with 403 when the logged-in reseller tries to
 // act on a client that is not attached to any of their allowed inbounds.
 // No-op for non-reseller roles. Returns true to continue handling.
-func guardClientEmailScope(c *gin.Context, svc *service.ClientService, email string) bool {
-	set, isReseller := resellerAllowedSet(c)
-	if !isReseller {
+func guardClientEmailScope(c *gin.Context, _ *service.ClientService, email string) bool {
+	set, scoped := resellerAllowedSet(c)
+	if !scoped {
 		return true
 	}
-	ids, err := svc.GetInboundIdsForEmail(nil, email)
-	if err == nil {
-		for _, id := range ids {
-			if _, ok := set[id]; ok {
-				return true
-			}
-		}
+	var records []model.ClientRecord
+	if err := database.GetDB().Where("email = ?", email).Find(&records).Error; err == nil &&
+		scopeAllowsClientRecords(set, records) {
+		return true
 	}
 	pureJsonMsg(c, http.StatusForbidden, false, "forbidden: client is outside your reseller scope")
 	c.Abort()
 	return false
 }
 
-// guardClientSubIdScope aborts with 403 when the logged-in reseller asks for a
-// subscription id whose clients live outside their allowed inbounds. The links
-// behind a subId embed the client's credentials, so this is the same class of
-// check as guardClientEmailScope — just keyed by subId, which is what the
-// subscription endpoints address clients by. No-op for non-scoped roles.
-func guardClientSubIdScope(c *gin.Context, svc *service.ClientService, subId string) bool {
-	set, isReseller := resellerAllowedSet(c)
-	if !isReseller {
+// guardClientSubIdScope validates every client record sharing a subscription id.
+func guardClientSubIdScope(c *gin.Context, _ *service.ClientService, subId string) bool {
+	set, scoped := resellerAllowedSet(c)
+	if !scoped {
 		return true
 	}
-	ids, err := svc.GetInboundIdsForSubId(nil, subId)
-	if err == nil {
-		for _, id := range ids {
-			if _, ok := set[id]; ok {
-				return true
-			}
-		}
+	var records []model.ClientRecord
+	if err := database.GetDB().Where("sub_id = ?", subId).Find(&records).Error; err == nil &&
+		scopeAllowsClientRecords(set, records) {
+		return true
 	}
 	pureJsonMsg(c, http.StatusForbidden, false, "forbidden: subscription is outside your reseller scope")
 	c.Abort()
 	return false
 }
 
+// 
 // guardInboundIdsScope ensures every id is within the reseller's allowed set
 // (and that at least one inbound was supplied). No-op for non-reseller roles.
 func guardInboundIdsScope(c *gin.Context, inboundIds []int) bool {

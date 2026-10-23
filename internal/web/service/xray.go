@@ -7,9 +7,12 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 
+	"github.com/mhsanaei/3x-ui/v3/internal/amneziawg"
+	"github.com/mhsanaei/3x-ui/v3/internal/amneziawgnet"
 	"github.com/mhsanaei/3x-ui/v3/internal/config"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
@@ -20,12 +23,58 @@ import (
 )
 
 var (
-	p                 *xray.Process
 	lock              sync.Mutex
 	isNeedXrayRestart atomic.Bool // Indicates that restart was requested for Xray
 	isManuallyStopped atomic.Bool // Indicates that Xray was stopped manually from the panel
-	result            string
+	xrayState         xrayLifecycle
 )
+
+type xrayLifecycle struct {
+	mu      sync.RWMutex
+	process *xray.Process
+	result  string
+	// heldBack is why the running core still serves the previous config.
+	heldBack string
+}
+
+func (s *xrayLifecycle) snapshot() (*xray.Process, string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.process, s.result
+}
+
+func (s *xrayLifecycle) replace(process *xray.Process) {
+	s.mu.Lock()
+	s.process = process
+	s.result = ""
+	s.heldBack = ""
+	s.mu.Unlock()
+}
+
+func (s *xrayLifecycle) holdBack(reason string) {
+	s.mu.Lock()
+	s.heldBack = reason
+	s.mu.Unlock()
+}
+
+func (s *xrayLifecycle) heldBackReason() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.heldBack
+}
+
+func (s *xrayLifecycle) storeResult(process *xray.Process, result string) {
+	s.mu.Lock()
+	if s.process == process && s.result == "" {
+		s.result = result
+	}
+	s.mu.Unlock()
+}
+
+func currentXrayProcess() *xray.Process {
+	process, _ := xrayState.snapshot()
+	return process
+}
 
 // XrayService provides business logic for Xray process management.
 // It handles starting, stopping, restarting Xray, and managing its configuration.
@@ -38,23 +87,25 @@ type XrayService struct {
 
 // IsXrayRunning checks if the Xray process is currently running.
 func (s *XrayService) IsXrayRunning() bool {
-	return p != nil && p.IsRunning()
+	process := currentXrayProcess()
+	return process != nil && process.IsRunning()
 }
 
 // XrayProcess returns the current Xray process instance (may be nil when Xray
-// is not running). It exposes the package-level process to callers outside this
-// package (e.g. the tgbot subpackage) without changing access semantics.
+// is not running). It exposes the lifecycle snapshot to callers outside this
+// package (e.g. the tgbot subpackage).
 func XrayProcess() *xray.Process {
-	return p
+	return currentXrayProcess()
 }
 
 // GetXrayErr returns the error from the Xray process, if any.
 func (s *XrayService) GetXrayErr() error {
-	if p == nil {
+	process := currentXrayProcess()
+	if process == nil {
 		return nil
 	}
 
-	err := p.GetErr()
+	err := process.GetErr()
 	if err == nil {
 		return nil
 	}
@@ -68,19 +119,23 @@ func (s *XrayService) GetXrayErr() error {
 	return err
 }
 
+// GetHeldBackConfig returns why the running core still serves its previous
+// config, or "" when the pending config was applied.
+func (s *XrayService) GetHeldBackConfig() string {
+	return xrayState.heldBackReason()
+}
+
 // GetXrayResult returns the result string from the Xray process.
 func (s *XrayService) GetXrayResult() string {
-	if result != "" {
-		return result
+	process, cachedResult := xrayState.snapshot()
+	if cachedResult != "" {
+		return cachedResult
 	}
-	if s.IsXrayRunning() {
-		return ""
-	}
-	if p == nil {
+	if process == nil || process.IsRunning() {
 		return ""
 	}
 
-	result = p.GetResult()
+	result := process.GetResult()
 
 	if runtime.GOOS == "windows" && result == "exit status 1" {
 		// exit status 1 on Windows means that Xray process was killed
@@ -88,15 +143,17 @@ func (s *XrayService) GetXrayResult() string {
 		return ""
 	}
 
+	xrayState.storeResult(process, result)
 	return result
 }
 
 // GetXrayVersion returns the version of the running Xray process.
 func (s *XrayService) GetXrayVersion() string {
-	if p == nil {
+	process := currentXrayProcess()
+	if process == nil {
 		return "Unknown"
 	}
-	return p.GetVersion()
+	return process.GetXrayVersion()
 }
 
 // RemoveIndex removes an element at the specified index from a slice.
@@ -125,6 +182,11 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 	// still carry sessionPlacement/sessionKey; lift them too (same reason as
 	// the per-inbound lift below).
 	xrayConfig.OutboundConfigs = liftOutboundsXhttpSessionIDKeys(xrayConfig.OutboundConfigs)
+	// Bridge amneziawg outbounds before anything else reads OutboundConfigs;
+	// the core has no amneziawg proxy and would reject the raw entry.
+	if err := transformAmneziaWGOutbounds(xrayConfig); err != nil {
+		return nil, err
+	}
 
 	_, _, _ = s.inboundService.AddTraffic(nil, nil)
 
@@ -139,11 +201,21 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 		if inbound.NodeID != nil {
 			continue
 		}
-		if inbound.Protocol == model.MTProto {
+		if inbound.Protocol == model.MTProto || inbound.Protocol == model.AmneziaWG || inbound.Protocol == model.TUIC {
 			continue
 		}
 		settings := map[string]any{}
-		json.Unmarshal([]byte(inbound.Settings), &settings)
+		_ = json.Unmarshal([]byte(inbound.Settings), &settings)
+		var wireguardClientsByEmail map[string]model.Client
+		if inbound.Protocol == model.WireGuard {
+			inboundClients, _ := ParseInboundSettingsClients(inbound.Settings)
+			if len(inboundClients) > 0 {
+				wireguardClientsByEmail = make(map[string]model.Client, len(inboundClients))
+				for _, client := range inboundClients {
+					wireguardClientsByEmail[strings.ToLower(strings.TrimSpace(client.Email))] = client
+				}
+			}
+		}
 
 		dbClients, listErr := s.inboundService.clientService.ListForInbound(nil, inbound.Id)
 		if listErr != nil {
@@ -156,7 +228,8 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 			enableMap[clientTraffic.Email] = clientTraffic.Enable
 		}
 
-		var finalClients []any
+		finalClients := make([]any, 0, len(dbClients))
+		var wgPeers []any
 		for i := range dbClients {
 			c := dbClients[i]
 			if enable, exists := enableMap[c.Email]; exists && !enable {
@@ -169,6 +242,9 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 			flow := c.Flow
 			if flow == "xtls-rprx-vision-udp443" {
 				flow = "xtls-rprx-vision"
+			}
+			if inbound.DisableFlow {
+				flow = ""
 			}
 			entry := map[string]any{"email": c.Email}
 			switch inbound.Protocol {
@@ -204,14 +280,31 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 				if c.Auth != "" {
 					entry["auth"] = c.Auth
 				}
+			case model.WireGuard:
+				if inboundClient, ok := wireguardClientsByEmail[strings.ToLower(strings.TrimSpace(c.Email))]; ok {
+					c.AllowedIPs = inboundClient.AllowedIPs
+					c.PreSharedKey = inboundClient.PreSharedKey
+				}
+				wgPeers = append(wgPeers, model.WireguardPeerFromClient(c))
+				continue
 			}
 			finalClients = append(finalClients, entry)
 		}
 
-		_, hadClients := settings["clients"]
-		mutated := hadClients || len(finalClients) > 0
-		if mutated {
-			settings["clients"] = finalClients
+		var mutated bool
+		if inbound.Protocol == model.WireGuard {
+			delete(settings, "clients")
+			if wgPeers == nil {
+				wgPeers = []any{}
+			}
+			settings["peers"] = wgPeers
+			mutated = true
+		} else {
+			_, hadClients := settings["clients"]
+			mutated = hadClients || len(finalClients) > 0
+			if mutated {
+				settings["clients"] = finalClients
+			}
 		}
 
 		if inboundCanHostFallbacks(inbound) {
@@ -240,7 +333,7 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 		if len(inbound.StreamSettings) > 0 {
 			// Unmarshal stream JSON
 			var stream map[string]any
-			json.Unmarshal([]byte(inbound.StreamSettings), &stream)
+			_ = json.Unmarshal([]byte(inbound.StreamSettings), &stream)
 
 			// Remove the "settings" field under "tlsSettings" and "realitySettings"
 			tlsSettings, ok1 := stream["tlsSettings"].(map[string]any)
@@ -254,6 +347,24 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 			}
 
 			delete(stream, "externalProxy")
+
+			// finalmask.tcp + REALITY panics Xray-core on the first connection
+			// (XTLS/Xray-core#6453). AddInbound/UpdateInbound reject this
+			// combination at save time, but a row saved before that guard
+			// existed (upgrade, node sync, restored backup, direct DB edit)
+			// would still crash Xray on the next restart without this — drop
+			// it here too, the same way liftXhttpSessionIDKeys and
+			// HealShadowsocksClientMethods heal other legacy data in place.
+			if len(finalMaskRealityTcpMasks(stream)) > 0 {
+				logger.Warningf("Inbound %q: dropping finalmask, incompatible with REALITY security (crashes Xray-core, see XTLS/Xray-core#6453)", inbound.Tag)
+				delete(stream, "finalmask")
+			}
+
+			dropEmptyRandPackets(stream["finalmask"])
+
+			if dropped := stripIncompleteXmcMasks(stream); dropped > 0 {
+				logger.Warningf("Inbound %q: dropping %d XMC finalmask mask(s) without complete Minecraft profiles — reconfigure them to restore the obfuscation (see XTLS/Xray-core#6487)", inbound.Tag, dropped)
+			}
 
 			// xray-core v26.6.22 (#6258) renamed the XHTTP session keys and
 			// kept no fallback. Lift legacy sessionPlacement/sessionKey onto the
@@ -301,6 +412,27 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 		injectMtprotoEgress(xrayConfig, inbound)
 	}
 
+	// Every AmneziaWG inbound is embedded (internal/amneziawgnet: amneziawg-go
+	// over a gVisor netstack, no kernel module) and relays every peer's
+	// decapsulated traffic into its own loopback SOCKS5 inbound, always on —
+	// unlike mtproto's bridge above, there's no opt-in gate here: once
+	// traffic is decapsulated in gVisor, Xray's own freedom outbound is the
+	// only way it reaches the real internet at all, not an optional extra
+	// hop. Whether it goes anywhere beyond Xray's default routing is up to
+	// whatever rules the admin adds through the stock Routing page, exactly
+	// like routing any other protocol.
+	injectAmneziawgnetSocks(xrayConfig, inbounds)
+
+	// Restores each opted-in peer's own distinct public IPv6 source identity
+	// for its outbound connections — a peer that has an IPv6 address in its
+	// AllowedIPs, on an inbound with IPv6Enabled, gets its own freedom
+	// outbound bound to that exact address via sendThrough.
+	// internal/amneziawgnet's own Manager is responsible for actually
+	// aliasing that address onto the host (see v6alias.go) so the kernel
+	// lets Xray bind an egress socket to it at all; this call only builds
+	// the Xray-side outbound/routing-rule half.
+	injectAmneziawgV6Egress(xrayConfig, inbounds)
+
 	// Wire the panel's own HTTP traffic through the configured outbound, after
 	// the subscription merge so subscription outbound tags are valid targets.
 	if egressTag, err := s.settingService.GetPanelOutbound(); err != nil {
@@ -328,10 +460,10 @@ const PanelEgressInboundTag = "panel-egress"
 // already taken by other inbounds in the generated config are skipped.
 const panelEgressBasePort = 62790
 
-// injectPanelEgress appends a loopback SOCKS inbound to the generated config
-// and prepends a routing rule sending it to outboundTag. Both live only in the
-// generated config — the stored template is never modified — and both are
-// hot-appliable, so changing the panel outbound never restarts the core.
+// injectPanelEgress appends a loopback SOCKS inbound and routing rule only when
+// outboundTag resolves in the final outbound or balancer set. Otherwise the
+// entire injection is skipped. Generated state is hot-appliable and never
+// modifies the stored template or restarts the core.
 func injectPanelEgress(cfg *xray.Config, outboundTag string) {
 	for i := range cfg.InboundConfigs {
 		if cfg.InboundConfigs[i].Tag == PanelEgressInboundTag {
@@ -348,6 +480,10 @@ func injectPanelEgress(cfg *xray.Config, outboundTag string) {
 			logger.Warning("panel egress: routing section is unparsable, skipping injection:", err)
 			return
 		}
+	}
+	if !routingTargetExists(routing, cfg.OutboundConfigs, outboundTag) {
+		logger.Warning("panel egress: target tag [", outboundTag, "] not found, skipping injection")
+		return
 	}
 	rules, _ := routing["rules"].([]any)
 	rule := map[string]any{
@@ -392,6 +528,25 @@ func injectPanelEgress(cfg *xray.Config, outboundTag string) {
 	})
 }
 
+func outboundTagExists(outbounds json_util.RawMessage, tag string) bool {
+	var parsed []struct {
+		Tag string `json:"tag"`
+	}
+	if tag == "" || json.Unmarshal(outbounds, &parsed) != nil {
+		return false
+	}
+	for _, outbound := range parsed {
+		if outbound.Tag == tag {
+			return true
+		}
+	}
+	return false
+}
+
+func routingTargetExists(routing map[string]any, outbounds json_util.RawMessage, tag string) bool {
+	return routingTagIsBalancer(routing, tag) || outboundTagExists(outbounds, tag)
+}
+
 // NodeEgressInboundTag returns the loopback SOCKS inbound tag for a given node.
 func NodeEgressInboundTag(nodeID int) string {
 	return fmt.Sprintf("node-egress-%d", nodeID)
@@ -424,6 +579,10 @@ func injectNodeEgresses(cfg *xray.Config, nodes []*model.Node) {
 
 	for _, n := range nodes {
 		if !n.Enable || n.OutboundTag == "" {
+			continue
+		}
+		if !routingTargetExists(routing, cfg.OutboundConfigs, n.OutboundTag) {
+			logger.Warning("node egress: target tag [", n.OutboundTag, "] not found, skipping node [", n.Id, "]")
 			continue
 		}
 		tag := NodeEgressInboundTag(n.Id)
@@ -503,11 +662,11 @@ func routingTagIsBalancer(routing map[string]any, tag string) bool {
 const mtprotoEgressSocksSettings = `{"auth":"noauth","udp":false}`
 
 // injectMtprotoEgress wires one routed mtproto inbound into the generated
-// config: it appends a loopback SOCKS inbound (tagged with the inbound's own tag,
-// on the egress port persisted in settings) and, when an outbound is selected,
-// prepends a routing rule sending that tag to it. Both live only in the generated
-// config — the stored template is untouched — and both are hot-appliable, so
-// toggling routing never forces a full Xray restart. Mirrors injectPanelEgress.
+// config after any selected outbound resolves in the final target set. Invalid
+// selected targets or routing data skip the entire injection; without a selected
+// outbound, the bridge retains default-route behavior. Generated state remains
+// hot-appliable, leaves the stored template untouched, and never forces a full
+// Xray restart. Mirrors injectPanelEgress.
 func injectMtprotoEgress(cfg *xray.Config, inbound *model.Inbound) {
 	var parsed struct {
 		RouteThroughXray bool   `json:"routeThroughXray"`
@@ -530,31 +689,33 @@ func injectMtprotoEgress(cfg *xray.Config, inbound *model.Inbound) {
 
 	if parsed.OutboundTag != "" {
 		routing := map[string]any{}
-		parseOK := true
 		if len(cfg.RouterConfig) > 0 {
 			if err := json.Unmarshal(cfg.RouterConfig, &routing); err != nil {
-				logger.Warning("mtproto egress: routing section is unparsable, skipping rule:", err)
-				parseOK = false
+				logger.Warning("mtproto egress: routing section is unparsable, skipping injection:", err)
+				return
 			}
 		}
-		if parseOK {
-			rules, _ := routing["rules"].([]any)
-			rule := map[string]any{
-				"type":       "field",
-				"inboundTag": []any{tag},
-			}
-			if routingTagIsBalancer(routing, parsed.OutboundTag) {
-				rule["balancerTag"] = parsed.OutboundTag
-			} else {
-				rule["outboundTag"] = parsed.OutboundTag
-			}
-			routing["rules"] = append([]any{rule}, rules...)
-			if newRouting, err := json.Marshal(routing); err == nil {
-				cfg.RouterConfig = json_util.RawMessage(newRouting)
-			} else {
-				logger.Warning("mtproto egress: failed to rebuild routing section, skipping rule:", err)
-			}
+		if !routingTargetExists(routing, cfg.OutboundConfigs, parsed.OutboundTag) {
+			logger.Warning("mtproto egress: target tag [", parsed.OutboundTag, "] not found, skipping injection")
+			return
 		}
+		rules, _ := routing["rules"].([]any)
+		rule := map[string]any{
+			"type":       "field",
+			"inboundTag": []any{tag},
+		}
+		if routingTagIsBalancer(routing, parsed.OutboundTag) {
+			rule["balancerTag"] = parsed.OutboundTag
+		} else {
+			rule["outboundTag"] = parsed.OutboundTag
+		}
+		routing["rules"] = append([]any{rule}, rules...)
+		newRouting, err := json.Marshal(routing)
+		if err != nil {
+			logger.Warning("mtproto egress: failed to rebuild routing section, skipping injection:", err)
+			return
+		}
+		cfg.RouterConfig = json_util.RawMessage(newRouting)
 	}
 
 	cfg.InboundConfigs = append(cfg.InboundConfigs, xray.InboundConfig{
@@ -564,6 +725,223 @@ func injectMtprotoEgress(cfg *xray.Config, inbound *model.Inbound) {
 		Settings: json_util.RawMessage(mtprotoEgressSocksSettings),
 		Tag:      tag,
 	})
+}
+
+// amneziawgEgressSniffingSettings matches this fork's normal per-inbound
+// default (see default.json's "mixed" inbound). Without this, domain-based
+// Routing rules can never match this relay: the peer resolved DNS
+// itself, through the tunnel, before ever sending a packet — by the time the
+// embedded forwarder recovers the decapsulated traffic, the destination is
+// already a bare IP, with no domain name attached at the network layer at
+// all. Sniffing recovers it from the payload itself (TLS SNI / HTTP Host /
+// QUIC) the same way it already does for every other inbound; without it,
+// only tag/IP/network-based rules can ever match this traffic, and any
+// domain rule above it in the list is silently unreachable.
+const amneziawgEgressSniffingSettings = `{"enabled":true,"destOverride":["http","tls","quic","fakedns"]}`
+
+// injectAmneziawgnetSocks gives every enabled AmneziaWG inbound with at
+// least one qualifying peer its own loopback SOCKS5 inbound for the
+// embedded (amneziawg-go) relay path (internal/amneziawgnet) -- always on,
+// since there is no alternative datapath once traffic is decapsulated in
+// gVisor: Xray's own freedom outbound is how it reaches the real internet at
+// all (see internal/amneziawgnet/relay.go's doc comment, Finding 3 of the
+// migration plan). Tagged with the inbound's own real tag: it's already
+// selectable in the panel's stock Routing page (InboundService.GetInboundTags
+// is protocol-blind), and per-inbound traffic totals
+// (internal/web/service/inbound_traffic.go's addClientTraffic) match by
+// exact tag -- reusing it isn't a style choice.
+func injectAmneziawgnetSocks(cfg *xray.Config, inbounds []*model.Inbound) {
+	existingTags := make(map[string]struct{}, len(cfg.InboundConfigs))
+	for i := range cfg.InboundConfigs {
+		existingTags[cfg.InboundConfigs[i].Tag] = struct{}{}
+	}
+
+	for _, inbound := range inbounds {
+		if inbound.Protocol != model.AmneziaWG || !inbound.Enable || inbound.NodeID != nil {
+			continue
+		}
+		inst, ok := amneziawg.InstanceFromInbound(inbound)
+		if !ok {
+			continue
+		}
+		if _, taken := existingTags[inbound.Tag]; taken {
+			logger.Warning("amneziawgnet socks: inbound tag [", inbound.Tag, "] already present in generated config, skipping its relay inbound")
+			continue
+		}
+
+		emails := make([]string, 0, len(inst.Peers))
+		for _, p := range inst.Peers {
+			if p.Email != "" {
+				emails = append(emails, p.Email)
+			}
+		}
+		if len(emails) == 0 {
+			continue
+		}
+
+		settings, err := amneziawgnet.SocksInboundSettings(emails, amneziawgnet.SocksPassword())
+		if err != nil {
+			logger.Warning("amneziawgnet socks: building settings for inbound [", inbound.Tag, "]: ", err)
+			continue
+		}
+
+		existingTags[inbound.Tag] = struct{}{}
+		cfg.InboundConfigs = append(cfg.InboundConfigs, xray.InboundConfig{
+			Listen:   json_util.RawMessage(`"127.0.0.1"`),
+			Port:     amneziawgnet.SOCKSPortForInbound(inbound.Id),
+			Protocol: "socks",
+			Settings: json_util.RawMessage(settings),
+			Sniffing: json_util.RawMessage(amneziawgEgressSniffingSettings),
+			Tag:      inbound.Tag,
+		})
+	}
+}
+
+// amneziawgV6EgressTag returns the stable, globally-unique freedom outbound
+// tag for one peer's IPv6 source-identity egress. Stable across config
+// regenerations (a pure function of two stable identifiers), so
+// internal/xray/hot_diff.go's tag-keyed outbound/routing diffing recognizes
+// "unchanged" rather than remove+recreate on every poll. The inbound.Id
+// prefix is defense in depth, not load-bearing on its own: email is already
+// enforced globally unique across the whole panel's client table
+// (model.ClientRecord.Email has a gorm uniqueIndex) — kept anyway since it
+// costs nothing and makes the tag self-describing, matching
+// NodeEgressInboundTag's own style.
+func amneziawgV6EgressTag(inboundID int, email string) string {
+	return fmt.Sprintf("amneziawg-v6-%d-%s", inboundID, email)
+}
+
+// injectAmneziawgV6Egress gives every enabled, non-node-hosted AmneziaWG
+// peer with an IPv6 AllowedIPs entry its own single-purpose freedom
+// outbound, bound via sendThrough to that exact address, plus a routing
+// rule sending only that peer's own traffic through it — restoring the
+// per-client public IPv6 identity the hard cutover temporarily dropped
+// (Phase 3.5 of the migration plan). Scoped to outbound source identity
+// only: it depends on internal/amneziawgnet's own alias mechanism actually
+// giving the host that address at the OS level (see v6alias.go's
+// V6AliasesActive, the exact same gate this function uses below) — without
+// that, sendThrough fails to bind and every connection through it errors
+// outright (freedom.go's dial failure); there is no fallback outbound.
+//
+// The routing rule matches both inboundTag and user: SocksInboundSettings
+// (used by injectAmneziawgnetSocks above) already authenticates each
+// connection as the peer's own email via stock SOCKS5 auth, and a stock
+// Xray SOCKS5 inbound sets that connection's stats/routing identity from
+// the authenticated username — so "user" reliably isolates exactly one
+// peer's traffic, the same building block Finding 3 of the migration plan
+// already established for per-client stats.
+//
+// Modeled on injectNodeEgresses (the established N-per-slice inbound+rule
+// precedent, not injectAmneziawgnetSocks itself, which only ever emits a
+// single inbound and never touches outbounds/routing) and
+// mergeSubscriptionOutbounds's unmarshal-append-remarshal pattern for
+// cfg.OutboundConfigs. Synthetic rules are prepended ahead of whatever's
+// already in the routing rules array, the same pattern injectNodeEgresses/
+// injectMtprotoEgress already use for their own always-must-win infra
+// rules — this never touches the admin's own saved Routing-page rule
+// order.
+func injectAmneziawgV6Egress(cfg *xray.Config, inbounds []*model.Inbound) {
+	// Protocol is checked alongside Tag, not just Tag alone: a tag collision
+	// with some unrelated (non-socks) inbound must not be mistaken for this
+	// instance's own relay having been created.
+	liveInboundTags := make(map[string]struct{}, len(cfg.InboundConfigs))
+	for i := range cfg.InboundConfigs {
+		if cfg.InboundConfigs[i].Protocol == "socks" {
+			liveInboundTags[cfg.InboundConfigs[i].Tag] = struct{}{}
+		}
+	}
+
+	var existingOutbounds []any
+	if len(cfg.OutboundConfigs) > 0 {
+		if err := json.Unmarshal(cfg.OutboundConfigs, &existingOutbounds); err != nil {
+			logger.Warning("amneziawg v6 egress: outbounds section is unparsable, skipping injection:", err)
+			return
+		}
+	}
+	usedOutboundTags := make(map[string]struct{}, len(existingOutbounds))
+	for _, o := range existingOutbounds {
+		if m, ok := o.(map[string]any); ok {
+			if t, ok := m["tag"].(string); ok {
+				usedOutboundTags[t] = struct{}{}
+			}
+		}
+	}
+
+	routing := map[string]any{}
+	if len(cfg.RouterConfig) > 0 {
+		if err := json.Unmarshal(cfg.RouterConfig, &routing); err != nil {
+			logger.Warning("amneziawg v6 egress: routing section is unparsable, skipping injection:", err)
+			return
+		}
+	}
+	rules, _ := routing["rules"].([]any)
+	newRules := make([]any, 0)
+	newOutbounds := make([]any, 0)
+
+	for _, inbound := range inbounds {
+		if inbound.Protocol != model.AmneziaWG || !inbound.Enable || inbound.NodeID != nil {
+			continue
+		}
+		if _, live := liveInboundTags[inbound.Tag]; !live {
+			// The relay inbound itself wasn't created this pass (e.g. a tag
+			// collision inside injectAmneziawgnetSocks) -- no SOCKS5 inbound
+			// exists for hot_diff.go's inboundTag match to ever fire against.
+			continue
+		}
+		inst, ok := amneziawg.InstanceFromInbound(inbound)
+		if !ok || !amneziawgnet.V6AliasesActive(inst) {
+			continue
+		}
+		for _, p := range inst.Peers {
+			if p.Email == "" {
+				continue
+			}
+			v6 := amneziawg.FirstIPv6(p.AllowedIPs)
+			if v6 == "" {
+				continue
+			}
+			tag := amneziawgV6EgressTag(inbound.Id, p.Email)
+			if _, taken := usedOutboundTags[tag]; taken {
+				logger.Warning("amneziawg v6 egress: outbound tag [", tag, "] already exists, skipping peer [", p.Email, "]")
+				continue
+			}
+			usedOutboundTags[tag] = struct{}{}
+			newOutbounds = append(newOutbounds, map[string]any{
+				"tag":         tag,
+				"protocol":    "freedom",
+				"sendThrough": v6,
+				"settings":    map[string]any{},
+			})
+			newRules = append(newRules, map[string]any{
+				"type":        "field",
+				"inboundTag":  []any{inbound.Tag},
+				"user":        []any{p.Email},
+				"outboundTag": tag,
+			})
+		}
+	}
+
+	if len(newOutbounds) == 0 {
+		return
+	}
+
+	merged := make([]any, 0, len(existingOutbounds))
+	merged = append(merged, existingOutbounds...)
+	merged = append(merged, newOutbounds...)
+	combined, err := json.MarshalIndent(merged, "", "  ")
+	if err != nil {
+		logger.Warning("amneziawg v6 egress: failed to rebuild outbounds section, skipping injection:", err)
+		return
+	}
+	cfg.OutboundConfigs = json_util.RawMessage(combined)
+
+	routing["rules"] = append(newRules, rules...)
+	newRouting, err := json.Marshal(routing)
+	if err != nil {
+		logger.Warning("amneziawg v6 egress: failed to rebuild routing section, skipping injection:", err)
+		return
+	}
+	cfg.RouterConfig = json_util.RawMessage(newRouting)
 }
 
 // mergeSubscriptionOutbounds appends the subscription outbounds to the
@@ -683,6 +1061,19 @@ func ensureStatsPolicy(policy json_util.RawMessage) json_util.RawMessage {
 	return out
 }
 
+// caseVariantKeys returns every key of parsed that equals want ignoring case,
+// lowest first so the fold is deterministic when several variants are present.
+func caseVariantKeys(parsed map[string]any, want string) []string {
+	var keys []string
+	for key := range parsed {
+		if strings.EqualFold(key, want) {
+			keys = append(keys, key)
+		}
+	}
+	slices.Sort(keys)
+	return keys
+}
+
 func resolveXrayLogPaths(logCfg json_util.RawMessage) json_util.RawMessage {
 	if len(logCfg) == 0 {
 		return logCfg
@@ -693,12 +1084,29 @@ func resolveXrayLogPaths(logCfg json_util.RawMessage) json_util.RawMessage {
 	}
 	changed := false
 	for _, key := range []string{"access", "error"} {
-		v, ok := parsed[key].(string)
+		// xray-core decodes this object with encoding/json, whose case-insensitive
+		// field match makes "Access" reach AccessLog too — fold every variant.
+		variants := caseVariantKeys(parsed, key)
+		value, hasValue := parsed[key]
+		for _, variant := range variants {
+			if variant == key {
+				continue
+			}
+			if !hasValue {
+				value, hasValue = parsed[variant], true
+			}
+			delete(parsed, variant)
+			changed = true
+		}
+		v, ok := value.(string)
 		if !ok {
 			continue
 		}
 		trimmed := strings.TrimSpace(v)
 		if trimmed == "" || strings.EqualFold(trimmed, "none") {
+			if changed {
+				parsed[key] = v
+			}
 			continue
 		}
 		base := path.Base(filepath.ToSlash(trimmed))
@@ -723,9 +1131,9 @@ func resolveXrayLogPaths(logCfg json_util.RawMessage) json_util.RawMessage {
 }
 
 // stripDisabledRules removes routing rules marked `enabled: false` from the
-// generated runtime config and strips the panel-only `enabled` key from the
-// rest, since xray-core has no such field. The internal api rule is always
-// kept (see isApiRule) so traffic stats can't be toggled off. The stored
+// generated runtime config and strips panel-only keys (`enabled`, `comment`)
+// from the rest, since xray-core has no such fields. The internal api rule is
+// always kept (see isApiRule) so traffic stats can't be toggled off. The stored
 // template is untouched — only the generated config is filtered.
 func stripDisabledRules(routerCfg json_util.RawMessage) json_util.RawMessage {
 	if len(routerCfg) == 0 {
@@ -760,6 +1168,10 @@ func stripDisabledRules(routerCfg json_util.RawMessage) json_util.RawMessage {
 			delete(rule, "enabled")
 			changed = true
 		}
+		if _, exists := rule["comment"]; exists {
+			delete(rule, "comment")
+			changed = true
+		}
 		activeRules = append(activeRules, rule)
 	}
 
@@ -777,12 +1189,13 @@ func stripDisabledRules(routerCfg json_util.RawMessage) json_util.RawMessage {
 
 // GetXrayTraffic fetches the current traffic statistics from the running Xray process.
 func (s *XrayService) GetXrayTraffic() ([]*xray.Traffic, []*xray.ClientTraffic, error) {
-	if !s.IsXrayRunning() {
+	process := currentXrayProcess()
+	if process == nil || !process.IsRunning() {
 		err := errors.New("xray is not running")
 		logger.Debug("Attempted to fetch Xray traffic, but Xray is not running:", err)
 		return nil, nil, err
 	}
-	apiPort := p.GetAPIPort()
+	apiPort := process.GetAPIPort()
 	if err := s.xrayAPI.Init(apiPort); err != nil {
 		logger.Debug("Failed to initialize Xray API:", err)
 		return nil, nil, err
@@ -805,13 +1218,14 @@ func (s *XrayService) GetXrayTraffic() ([]*xray.Traffic, []*xray.ClientTraffic, 
 // core as unsupported until the next restart, while transient errors leave the
 // capability undecided so a flaky poll can't lock in legacy mode.
 func (s *XrayService) GetOnlineUsers() ([]xray.OnlineUser, bool, error) {
-	if !s.IsXrayRunning() {
+	process := currentXrayProcess()
+	if process == nil || !process.IsRunning() {
 		return nil, false, nil
 	}
-	if p.OnlineAPISupport() == xray.OnlineAPIUnsupported {
+	if process.OnlineAPISupport() == xray.OnlineAPIUnsupported {
 		return nil, false, nil
 	}
-	if err := s.xrayAPI.Init(p.GetAPIPort()); err != nil {
+	if err := s.xrayAPI.Init(process.GetAPIPort()); err != nil {
 		logger.Debug("Failed to initialize Xray API:", err)
 		return nil, false, err
 	}
@@ -820,15 +1234,15 @@ func (s *XrayService) GetOnlineUsers() ([]xray.OnlineUser, bool, error) {
 	users, err := s.xrayAPI.GetOnlineUsers()
 	if err != nil {
 		if xray.IsUnimplementedErr(err) {
-			p.SetOnlineAPISupport(xray.OnlineAPIUnsupported)
+			process.SetOnlineAPISupport(xray.OnlineAPIUnsupported)
 			logger.Info("xray core does not support the online-stats API; falling back to traffic-delta onlines and access-log IP limit")
 			return nil, false, nil
 		}
 		logger.Debug("Failed to fetch Xray online users:", err)
 		return nil, false, err
 	}
-	if p.OnlineAPISupport() == xray.OnlineAPIUnknown {
-		p.SetOnlineAPISupport(xray.OnlineAPISupported)
+	if process.OnlineAPISupport() == xray.OnlineAPIUnknown {
+		process.SetOnlineAPISupport(xray.OnlineAPISupported)
 		logger.Info("xray core supports the online-stats API; using connection-based onlines and access-log-free IP limit")
 	}
 	return users, true, nil
@@ -850,13 +1264,14 @@ type BalancerStatus struct {
 // balancers alongside live ones.
 func (s *XrayService) GetBalancersStatus(tags []string) ([]BalancerStatus, error) {
 	statuses := make([]BalancerStatus, 0, len(tags))
-	if !s.IsXrayRunning() {
+	process := currentXrayProcess()
+	if process == nil || !process.IsRunning() {
 		for _, tag := range tags {
 			statuses = append(statuses, BalancerStatus{Tag: tag})
 		}
 		return statuses, nil
 	}
-	if err := s.xrayAPI.Init(p.GetAPIPort()); err != nil {
+	if err := s.xrayAPI.Init(process.GetAPIPort()); err != nil {
 		return nil, err
 	}
 	defer s.xrayAPI.Close()
@@ -879,25 +1294,74 @@ func (s *XrayService) GetBalancersStatus(tags []string) ([]BalancerStatus, error
 }
 
 // OverrideBalancer forces a balancer in the running core to use the given
-// outbound tag; an empty target clears the override.
+// outbound tag; an empty target clears the override. When target names
+// another balancer, the override resolves to the loopback outbound that
+// routes traffic through the target balancer via the routing rules.
 func (s *XrayService) OverrideBalancer(tag, target string) error {
-	if !s.IsXrayRunning() {
+	process := currentXrayProcess()
+	if process == nil || !process.IsRunning() {
 		return errors.New("xray is not running")
 	}
-	if err := s.xrayAPI.Init(p.GetAPIPort()); err != nil {
+	if target != "" {
+		resolved, err := s.resolveOverrideTarget(target)
+		if err != nil {
+			return err
+		}
+		if resolved != "" {
+			target = resolved
+		}
+	}
+	if err := s.xrayAPI.Init(process.GetAPIPort()); err != nil {
 		return err
 	}
 	defer s.xrayAPI.Close()
 	return s.xrayAPI.SetBalancerTarget(tag, target)
 }
 
+// resolveOverrideTarget checks if target names a balancer and, if so,
+// returns the loopback outbound tag that routes to it through the
+// routing rules. Returns empty if target is already a concrete outbound.
+func (s *XrayService) resolveOverrideTarget(target string) (string, error) {
+	template, err := s.settingService.GetXrayConfigTemplate()
+	if err != nil {
+		return "", err
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal([]byte(template), &cfg); err != nil {
+		return "", err
+	}
+	routing, _ := cfg["routing"].(map[string]any)
+	if routing == nil {
+		return "", nil
+	}
+	rules, _ := routing["rules"].([]any)
+	for _, r := range rules {
+		rule, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		if rule["balancerTag"] != target {
+			continue
+		}
+		inboundTags, ok := rule["inboundTag"].([]any)
+		if !ok || len(inboundTags) == 0 {
+			continue
+		}
+		if lbTag, ok := inboundTags[0].(string); ok && strings.HasPrefix(lbTag, "_bl_") {
+			return lbTag, nil
+		}
+	}
+	return "", nil
+}
+
 // TestRoute asks the running core which outbound its router picks for the
 // described connection.
 func (s *XrayService) TestRoute(req xray.RouteTestRequest) (*xray.RouteTestResult, error) {
-	if !s.IsXrayRunning() {
+	process := currentXrayProcess()
+	if process == nil || !process.IsRunning() {
 		return nil, errors.New("xray is not running")
 	}
-	if err := s.xrayAPI.Init(p.GetAPIPort()); err != nil {
+	if err := s.xrayAPI.Init(process.GetAPIPort()); err != nil {
 		return nil, err
 	}
 	defer s.xrayAPI.Close()
@@ -913,6 +1377,9 @@ func (s *XrayService) RestartXray(isForce bool) error {
 	lock.Lock()
 	defer lock.Unlock()
 	logger.Debug("restart Xray, force:", isForce)
+	if !isForce && isManuallyStopped.Load() {
+		return nil
+	}
 	isManuallyStopped.Store(false)
 
 	xrayConfig, err := s.GetXrayConfig()
@@ -920,28 +1387,59 @@ func (s *XrayService) RestartXray(isForce bool) error {
 		return err
 	}
 
-	if s.IsXrayRunning() {
-		configUnchanged := p.GetConfig().Equals(xrayConfig)
+	process := currentXrayProcess()
+	if process != nil && process.IsRunning() {
+		configUnchanged := process.GetConfig().Equals(xrayConfig)
 		if !isForce && configUnchanged && !isNeedXrayRestart.Load() {
 			logger.Debug("It does not need to restart Xray")
 			return nil
 		}
-		if !isForce && !configUnchanged && s.tryHotApply(xrayConfig) {
+		// A config the core cannot bind never replaces one that works: its failed
+		// start exits the core, and the watchdog would then loop on it forever.
+		if conflicts := bindConflicts(xrayConfig, process.GetConfig()); len(conflicts) > 0 {
+			refused := fmt.Sprintf("config refused: %s", conflicts[0])
+			for _, conflict := range conflicts {
+				logger.Error("xray config refused:", conflict.String())
+			}
+			// The refusal is otherwise invisible: the operator's request
+			// succeeded, so the status page has to carry the stale state.
+			xrayState.holdBack(refused)
+			return fmt.Errorf("xray %s", refused)
+		}
+		if !isForce && !configUnchanged && s.tryHotApply(process, xrayConfig) {
 			logger.Info("Xray config changes applied through the core API, no restart needed")
 			return nil
 		}
-		p.Stop()
+		_ = process.Stop()
+	} else if conflicts := bindConflicts(xrayConfig, nil); len(conflicts) > 0 {
+		// Nothing is running to protect and the core is the authority on what it
+		// can bind: start it and let its own error name the port it lost.
+		logger.Warning("xray config may not start:", conflicts[0].String())
 	}
 
-	p = xray.NewProcess(xrayConfig)
-	result = ""
+	process = xray.NewProcess(xrayConfig)
+	xrayState.replace(process)
 	s.xrayAPI.StatsLastValues = nil
-	err = p.Start()
+	err = process.Start()
 	if err != nil {
 		return err
 	}
 
 	return nil
+}
+
+// restartToDropClients reports whether a diff that strands clients must be
+// applied by restarting instead of through the API.
+func (s *XrayService) restartToDropClients(diff *xray.HotDiff) bool {
+	if diff == nil || !diff.DropsUsers() {
+		return false
+	}
+	restart, err := s.settingService.GetRestartXrayOnClientDisable()
+	if err != nil {
+		logger.Warning("get RestartXrayOnClientDisable failed:", err)
+		return false
+	}
+	return restart
 }
 
 // tryHotApply attempts to reconcile the running Xray instance with newCfg
@@ -950,19 +1448,25 @@ func (s *XrayService) RestartXray(isForce bool) error {
 // instance now matches newCfg; on any failure it returns false and the
 // caller falls back to a full process restart, which cleans up whatever was
 // partially applied. Callers must hold the package-level lock.
-func (s *XrayService) tryHotApply(newCfg *xray.Config) bool {
-	oldCfg := p.GetConfig()
+func (s *XrayService) tryHotApply(process *xray.Process, newCfg *xray.Config) bool {
+	oldCfg := process.GetConfig()
 	diff, ok := xray.ComputeHotDiff(oldCfg, newCfg)
 	if !ok {
 		logger.Debug("hot apply: config change is not API-applicable, falling back to restart")
 		return false
 	}
 	if diff.Empty() {
-		p.SetConfig(newCfg)
+		process.SetConfig(newCfg)
 		return true
 	}
+	// The core's RemoveUser drops the credential only, so a disabled or deleted
+	// client needs the restart this setting asks for.
+	if s.restartToDropClients(diff) {
+		logger.Info("hot apply: clients left the config, restarting to drop their live sessions")
+		return false
+	}
 
-	apiPort := p.GetAPIPort()
+	apiPort := process.GetAPIPort()
 	if apiPort <= 0 {
 		return false
 	}
@@ -977,6 +1481,12 @@ func (s *XrayService) tryHotApply(newCfg *xray.Config) bool {
 
 	// Removals first so changed handlers and port swaps never collide with
 	// the additions that follow.
+	for _, u := range diff.RemovedUsers {
+		if err := hotAPI.RemoveUser(u.Tag, u.Email); err != nil && !xray.IsMissingHandlerErr(err) {
+			logger.Info("hot apply: remove user [", u.Email, "] from [", u.Tag, "] failed:", err)
+			return false
+		}
+	}
 	for _, tag := range diff.RemovedInboundTags {
 		if err := hotAPI.DelInbound(tag); err != nil && !xray.IsMissingHandlerErr(err) {
 			logger.Info("hot apply: remove inbound [", tag, "] failed:", err)
@@ -1001,6 +1511,12 @@ func (s *XrayService) tryHotApply(newCfg *xray.Config) bool {
 			return false
 		}
 	}
+	for _, u := range diff.AddedUsers {
+		if err := addUserReconciling(&hotAPI, u); err != nil {
+			logger.Info("hot apply: add user [", u.Email, "] to [", u.Tag, "] failed:", err)
+			return false
+		}
+	}
 	if diff.RoutingConfig != nil {
 		if err := hotAPI.ApplyRoutingConfig(diff.RoutingConfig); err != nil {
 			logger.Info("hot apply: apply routing config failed:", err)
@@ -1008,8 +1524,21 @@ func (s *XrayService) tryHotApply(newCfg *xray.Config) bool {
 		}
 	}
 
-	p.SetConfig(newCfg)
+	process.SetConfig(newCfg)
 	return true
+}
+
+// addUserReconciling adds a user, and on an email conflict (the user was
+// already applied through the runtime API) replaces the existing user instead.
+func addUserReconciling(api *xray.XrayAPI, u xray.UserOp) error {
+	err := api.AddUser(u.Protocol, u.Tag, u.User)
+	if err == nil || !xray.IsUserExistsErr(err) {
+		return err
+	}
+	if delErr := api.RemoveUser(u.Tag, u.Email); delErr != nil && !xray.IsMissingHandlerErr(delErr) {
+		return delErr
+	}
+	return api.AddUser(u.Protocol, u.Tag, u.User)
 }
 
 // addInboundReconciling adds an inbound, and on a tag conflict (the handler
@@ -1056,8 +1585,9 @@ func (s *XrayService) StopXray() error {
 	defer lock.Unlock()
 	isManuallyStopped.Store(true)
 	logger.Debug("Attempting to stop Xray...")
-	if s.IsXrayRunning() {
-		return p.Stop()
+	process := currentXrayProcess()
+	if process != nil && process.IsRunning() {
+		return process.Stop()
 	}
 	return errors.New("xray is not running")
 }
@@ -1069,19 +1599,33 @@ func (s *XrayService) SetToNeedRestart() {
 
 // GetXrayAPIPort returns the port the local xray process is listening on
 // for its gRPC HandlerService, or 0 when xray isn't currently running.
-// Exposed for the runtime package's LocalRuntime adapter — runtime can't
-// reach into the package-level `p` directly without a service-package
-// import cycle.
+// Exposed for the runtime package's LocalRuntime adapter without a
+// service-package import cycle.
 func (s *XrayService) GetXrayAPIPort() int {
-	if p == nil || !p.IsRunning() {
+	process := currentXrayProcess()
+	if process == nil || !process.IsRunning() {
 		return 0
 	}
-	return p.GetAPIPort()
+	return process.GetAPIPort()
 }
 
 // IsNeedRestartAndSetFalse checks if restart is needed and resets the flag to false.
 func (s *XrayService) IsNeedRestartAndSetFalse() bool {
 	return isNeedXrayRestart.CompareAndSwap(true, false)
+}
+
+// ApplyPendingRestart consumes the need-restart flag and restarts Xray. If the
+// restart fails (for example GetXrayConfig hits a transient DB error and leaves
+// the old process running), it re-arms the flag so the next tick retries instead
+// of silently dropping the pending config change.
+func (s *XrayService) ApplyPendingRestart() {
+	if !s.IsNeedRestartAndSetFalse() {
+		return
+	}
+	if err := s.RestartXray(false); err != nil {
+		logger.Error("restart xray failed:", err)
+		s.SetToNeedRestart()
+	}
 }
 
 // DidXrayCrash checks if Xray crashed by verifying it's not running and wasn't manually stopped.

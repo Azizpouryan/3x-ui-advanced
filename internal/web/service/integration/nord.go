@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,11 +18,18 @@ type NordService struct {
 
 var nordHTTPClient = &http.Client{Timeout: 15 * time.Second}
 
+// nordAPIBase is a var so integration tests can use a local HTTP server.
+var nordAPIBase = "https://api.nordvpn.com"
+
 // maxResponseSize limits the maximum size of NordVPN API responses (10 MB).
 const maxResponseSize = 10 << 20
 
 func (s *NordService) GetCountries() (string, error) {
-	resp, err := nordHTTPClient.Get("https://api.nordvpn.com/v1/countries")
+	req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, nordAPIBase+"/v1/servers/countries?filters[servers_technologies][identifier]=wireguard_udp", nil)
+	if reqErr != nil {
+		return "", reqErr
+	}
+	resp, err := nordHTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -43,8 +51,12 @@ func (s *NordService) GetServers(countryId string) (string, error) {
 			return "", common.NewError("invalid country ID")
 		}
 	}
-	url := fmt.Sprintf("https://api.nordvpn.com/v2/servers?limit=0&filters[servers_technologies][id]=35&filters[country_id]=%s", countryId)
-	resp, err := nordHTTPClient.Get(url)
+	url := fmt.Sprintf("%s/v2/servers?limit=0&filters[servers_technologies][identifier]=wireguard_udp&filters[country_id]=%s", nordAPIBase, countryId)
+	req, reqErr := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if reqErr != nil {
+		return "", reqErr
+	}
+	resp, err := nordHTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -56,28 +68,7 @@ func (s *NordService) GetServers(countryId string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var data map[string]any
-	if err := json.Unmarshal(body, &data); err != nil {
-		return string(body), nil
-	}
-
-	servers, ok := data["servers"].([]any)
-	if !ok {
-		return string(body), nil
-	}
-
-	var filtered []any
-	for _, s := range servers {
-		if server, ok := s.(map[string]any); ok {
-			if load, ok := server["load"].(float64); ok && load > 7 {
-				filtered = append(filtered, s)
-			}
-		}
-	}
-	data["servers"] = filtered
-
-	result, _ := json.Marshal(data)
-	return string(result), nil
+	return string(body), nil
 }
 
 func (s *NordService) SetKey(privateKey string) (string, error) {
@@ -89,7 +80,7 @@ func (s *NordService) SetKey(privateKey string) (string, error) {
 		"token":       "",
 	}
 	data, _ := json.Marshal(nordData)
-	err := s.SettingService.SetNord(string(data))
+	err := s.SetNord(string(data))
 	if err != nil {
 		return "", err
 	}
@@ -97,8 +88,8 @@ func (s *NordService) SetKey(privateKey string) (string, error) {
 }
 
 func (s *NordService) GetCredentials(token string) (string, error) {
-	url := "https://api.nordvpn.com/v1/users/services/credentials"
-	req, err := http.NewRequest("GET", url, nil)
+	url := nordAPIBase + "/v1/users/services/credentials"
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
@@ -134,7 +125,7 @@ func (s *NordService) GetCredentials(token string) (string, error) {
 		"token":       token,
 	}
 	data, _ := json.Marshal(nordData)
-	err = s.SettingService.SetNord(string(data))
+	err = s.SetNord(string(data))
 	if err != nil {
 		return "", err
 	}
@@ -143,9 +134,9 @@ func (s *NordService) GetCredentials(token string) (string, error) {
 }
 
 func (s *NordService) GetNordData() (string, error) {
-	return s.SettingService.GetNord()
+	return s.GetNord()
 }
 
 func (s *NordService) DelNordData() error {
-	return s.SettingService.SetNord("")
+	return s.SetNord("")
 }

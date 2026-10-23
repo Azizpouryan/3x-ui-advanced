@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { CloseCircleFilled } from '@ant-design/icons';
 import { DatePicker } from 'antd';
 import dayjs from 'dayjs';
@@ -57,6 +58,7 @@ export default function DateTimePicker({
   allowClear = true,
   maxDate,
 }: DateTimePickerProps) {
+  const { t } = useTranslation();
   const { datepicker } = useDatepicker();
   const { isDark, isUltra } = useTheme();
   const jalaliRef = useRef<HTMLDivElement>(null);
@@ -127,7 +129,7 @@ export default function DateTimePicker({
           <button
             type="button"
             className="jdp-clear"
-            aria-label="clear"
+            aria-label={t('clear')}
             onMouseDown={(e) => e.preventDefault()}
             onClick={(e) => {
               e.stopPropagation();
@@ -145,8 +147,10 @@ export default function DateTimePicker({
   return (
     <DatePicker
       value={value}
-      onChange={(next) => onChange(next || null)}
+      onChange={(next) => commitChange(next || null)}
+      onCalendarChange={(next) => commitChange((Array.isArray(next) ? next[0] : next) || null)}
       showTime={showTime ? { format: 'HH:mm:ss' } : false}
+      needConfirm={false}
       format={format}
       placeholder={placeholder}
       disabled={disabled}

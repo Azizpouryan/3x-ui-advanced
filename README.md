@@ -1,110 +1,131 @@
 [English](/README.md) | [فارسی](/README.fa_IR.md) | [العربية](/README.ar_EG.md) | [中文](/README.zh_CN.md) | [Español](/README.es_ES.md) | [Русский](/README.ru_RU.md) | [Türkçe](/README.tr_TR.md)
 
-# 3X-UI Advanced — v3.8.5 admin fork
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./media/3x-ui-dark.png">
+    <img alt="3x-ui" src="./media/3x-ui-light.png">
+  </picture>
+</p>
 
-A customized fork of [MHSanaei/3X-UI](https://github.com/MHSanaei/3x-ui) — an advanced, open-source web panel for managing [Xray-core](https://github.com/XTLS/Xray-core) servers — extended with a built-in **multi-admin RBAC system**, **reseller scoping**, and a **fully offline installer** for air-gapped or restricted servers.
+<p align="center">
+  <a href="https://github.com/MHSanaei/3x-ui/releases"><img src="https://img.shields.io/github/v/release/mhsanaei/3x-ui" alt="Release"></a>
+  <a href="https://github.com/MHSanaei/3x-ui/actions"><img src="https://img.shields.io/github/actions/workflow/status/mhsanaei/3x-ui/release.yml.svg" alt="Build"></a>
+  <a href="#"><img src="https://img.shields.io/github/go-mod/go-version/mhsanaei/3x-ui.svg" alt="GO Version"></a>
+  <a href="https://github.com/MHSanaei/3x-ui/releases/latest"><img src="https://img.shields.io/github/downloads/mhsanaei/3x-ui/total.svg" alt="Downloads"></a>
+  <a href="https://www.gnu.org/licenses/gpl-3.0.en.html"><img src="https://img.shields.io/badge/license-GPL%20V3-blue.svg?longCache=true" alt="License"></a>
+  <a href="https://pkg.go.dev/github.com/mhsanaei/3x-ui/v3"><img src="https://pkg.go.dev/badge/github.com/mhsanaei/3x-ui/v3.svg" alt="Go Reference"></a>
+  <a href="https://docs.sanaei.dev"><img src="https://img.shields.io/badge/docs-docs.sanaei.dev-22d3ee" alt="Documentation"></a>
+</p>
 
-> [!WARNING]
-> **Migration status: NOT READY FOR INSTALLATION.** The v3.8.5 candidate currently passes the frontend build and shell syntax checks, but `go test ./...` fails because the current RBAC fork and v3.8.5 backend models/controllers are not yet consistently integrated. The installer intentionally refuses to use an older `latest` release. Do not install this branch on a production server.
+**3X-UI** is an advanced, open-source web control panel for managing [Xray-core](https://github.com/XTLS/Xray-core) servers. It provides a clean, multi-language interface for deploying, configuring, and monitoring a wide range of proxy and VPN protocols — from a single VPS to multi-node deployments.
+
+Built as an enhanced fork of the original X-UI project, 3X-UI adds broader protocol support, improved stability, per-client traffic accounting, and many quality-of-life features.
 
 > [!IMPORTANT]
 > This project is intended for personal use only. Please do not use it for illegal purposes or in a production environment.
 
-## What this fork adds
+## Features
 
-- **Role-Based Access Control (RBAC)** — manage multiple panel administrators from the **Admins** page, each with one of four roles:
-  - `super_admin` — full access to everything (the first/default admin).
-  - `manager` — manage inbounds & clients; **no** panel settings, Xray template, or admin management.
-  - `reseller` — scoped to assigned inbounds only; manages their own clients and **views** their inbounds read-only (cannot add / edit / enable-disable / delete inbounds).
-  - `readonly` — can view everything but cannot perform any write action.
-- **Audit log** — every admin action (create / update / delete admin, password reset, …) is recorded with actor, target, and timestamp.
-- **Offline install bundle** — install on a server with no internet using a self-contained tarball (panel binary + Xray-core + geo data). See [`offline/`](offline/).
-- **Fork-aware updater** — the panel's "check for update" reads releases from this fork (`admin6501/3x-ui`).
-- **PostgreSQL-safe migration** — SQLite → PostgreSQL migration copies all RBAC data (admins, roles, allowed inbounds, audit logs).
-
-## Reseller traffic allocation
-
-Give each **reseller** a total traffic budget and let the panel enforce it automatically:
-
-- Set a per-reseller **traffic quota** (in GB) on the **Admins** page — `0` means unlimited.
-- Usage is measured as the **combined up + download of all inbounds assigned to that reseller**.
-- When a reseller reaches their quota, the traffic job **auto-disables all of their assigned inbounds**, instantly cutting off their clients.
-- Inbounds disabled this way are tracked and **re-enabled automatically** once you raise or reset the reseller's quota.
-- **Over-selling is allowed** — only real consumption counts — and each reseller sees their own usage vs. quota on the Reseller dashboard.
-
-## Core features (from 3X-UI)
-
-- **Multi-protocol inbounds** — VLESS, VMess, Trojan, Shadowsocks, WireGuard, Hysteria2, HTTP, SOCKS (Mixed), Dokodemo-door / Tunnel, and TUN.
+- **Multi-protocol inbounds** — VLESS, VMess, Trojan, Shadowsocks, WireGuard, AmneziaWG, TUIC v5, Hysteria2, MTProto, HTTP, SOCKS (Mixed), Dokodemo-door / Tunnel, and TUN.
 - **Modern transports & security** — TCP (Raw), mKCP, WebSocket, gRPC, HTTPUpgrade, and XHTTP, secured with TLS, XTLS, and REALITY.
-- **Per-client management** — traffic quotas, expiry dates, IP limits, live online status, share links, QR codes, and subscriptions.
-- **Multi-node support**, outbound & routing (WARP, custom rules, load balancers, proxy chaining).
-- **Built-in subscription server** with [custom page templates](docs/custom-subscription-templates.md).
-- **Telegram bot**, **RESTful API** with in-panel Swagger, **SQLite or PostgreSQL**, **13 UI languages**, dark/light themes, and **Fail2ban** IP-limit enforcement.
+- **AmneziaWG built in** — DPI-resistant WireGuard runs inside the panel on a userspace network stack, with no kernel module, DKMS, or extra packages to install.
+- **TUIC v5 sidecar** — High-performance QUIC-based proxy with native UDP relay traffic metering, 0-RTT handshakes, and BBR congestion control.
+- **MTProto proxies** — per-client FakeTLS secrets, ad-tags, and quotas, applied live without dropping existing connections.
+- **Fallbacks** — serve multiple protocols on a single port (e.g. VLESS and Trojan on 443) using Xray's fallback support.
+- **Per-client management** — traffic quotas, expiry dates, IP limits with trusted-address exemptions, HWID device limits, scheduled renewal cycles, live online status, and one-click share links, QR codes, and subscriptions.
+- **Traffic statistics** — per inbound, per client, and per outbound, with reset controls.
+- **Multi-node support** — manage and scale across multiple servers from a single panel, including cloning inbounds onto other nodes.
+- **Outbound & routing** — WARP, NordVPN, PIA, custom routing rules, load balancers with balancer-to-balancer fallback, and outbound proxy chaining. Bundled geosite and geoip categories are browsable straight from the rule editor.
+- **Built-in subscription server** — raw, JSON, and Clash output, auto-selected from the client's User-Agent, plus [custom page templates](docs/custom-subscription-templates.md).
+- **Telegram and Discord bots** for remote monitoring and management.
+- **RESTful API** with scoped, optionally expiring tokens and an in-panel API reference.
+- **Installable panel (PWA)** — pin 3X-UI to a desktop or phone home screen.
+- **Flexible storage** — SQLite (default) or PostgreSQL.
+- **13 UI languages** with dark and light themes.
+- **Fail2ban integration** for enforcing per-client IP limits.
 
-## Panel features & options (this fork)
+## Screenshots
 
-Beyond the basics above, the panel also includes:
+<details>
+<summary>Click to expand</summary>
 
-- **Plans / Packages** — reusable client templates: prefill traffic, expiry and IP limit in one click.
-- **Client Groups** — bundle several inbounds so a single client subscription delivers multiple configs.
-- **Hosts** — publish custom subscription endpoints (address, port, remark, SNI) per inbound.
-- **Editable inbound protocol** — switch an existing inbound to another protocol; its clients are carried over (email, traffic quota, expiry, subscription id) and only their credentials are rebuilt, after a warning that previously shared links stop working.
-- **Subscription Remark Template** — build client link names from `{{VAR}}` tokens (`EMAIL`, `INBOUND`, `TRAFFIC_LEFT`, `DAYS_LEFT`, `HOST`, …); clearing the field restores the default template.
-- **Extra subscription formats** — JSON and Clash outputs (with optional routing rules) alongside the base64 subscription.
-- **Two-Factor Authentication (2FA / TOTP)** for admin logins.
-- **LDAP / Active Directory login** — authenticate panel admins against a directory.
-- **Email (SMTP) notifications** — event-based alerts with STARTTLS/TLS and a test-email button.
-- **External traffic webhook** — push client traffic events to an external URL.
-- **MTProto (Telegram) proxy** support via the bundled `mtg` sidecar.
-- **Jalali (Persian) / Gregorian calendar** toggle for all dates.
-- **In-panel Tutorials page** (super_admin only) — a multilingual quick-start guide to every panel section.
-- **Device (HWID) limit** — cap how many devices may fetch a client's subscription, using the `x-hwid` header Happ/Hiddify-style apps send. Panel-wide default plus a per-client override, a device list you can clear, and an optional strict mode that refuses apps sending no device id.
-- **Delete expired clients** — clear the ended clients of a single inbound from its row menu, or let the panel sweep them automatically a configurable number of days after they expire (off by default; `0` days never deletes).
-- **Subscription page branding** — build the page your users open in a browser from the panel: brand name, tagline, logo, announcement, colours, background, visible sections, support/Telegram/website buttons and custom CSS, with a live preview.
-- **Telegram shop — wallet & pay-as-you-go** — the bot sells configs to end users on a prepaid wallet. A user tops the wallet up (minimum and maximum per request are yours to set), optionally has to join a channel first, then creates a config with whatever traffic cap they like on the inbound you choose. **They are charged for what they actually consume**: set the price per GB in the panel, and if they buy 10 GB and use 1 GB, only one gigabyte's worth leaves their wallet. An optional daily fee per config covers time-based pricing. Metering runs every couple of minutes; when a wallet empties that user's configs switch off, and they come back the moment it is topped up. Every movement of money is written to a ledger, so a balance can always be explained. The **Telegram Shop** page shows wallets, top-up requests, configs and their live cost, and can credit or debit a wallet by hand.
-- **Custom roles** — build your own roles on the **Admins** page: name one, tick the permissions it should carry (view/manage inbounds, clients, plans, groups, hosts, nodes, panel settings, Xray config, admin management), and assign it like any built-in role. Tick *restrict to assigned inbounds* to make it behave as a reseller, quotas included. A role still held by an admin cannot be deleted.
-- **Reseller dashboard** — resellers land on their own dashboard after logging in: quota bars for traffic and client slots, client counts by state (active, online, expiring, ended), a per-inbound breakdown, the clients expiring inside the next week, and the most recently created ones.
-- **Disabling an admin takes their inbounds down** — switching a reseller account off also switches off the inbounds assigned to it, so their customers stop connecting, not just the reseller's own login. Re-enabling restores exactly what was taken down and never touches an inbound you disabled by hand.
-- **Hardened security** — CSRF protection, security headers, and configurable session lifetime.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./media/01-overview-dark.png">
+  <img alt="Overview" src="./media/01-overview-light.png">
+</picture>
 
-## Quick Start (online)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./media/02-add-inbound-dark.png">
+  <img alt="Inbounds" src="./media/02-add-inbound-light.png">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./media/03-add-client-dark.png">
+  <img alt="Add client" src="./media/03-add-client-light.png">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./media/05-add-nodes-dark.png">
+  <img alt="Configs" src="./media/05-add-nodes-light.png">
+</picture>
+
+</details>
+
+## Quick Start
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/Azizpouryan/3x-ui-advanced/main/install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
 ```
 
-A random username, password, and web base path are generated during install. Run `x-ui` afterwards to open the management menu (start/stop, reset credentials, manage SSL, etc.).
-
-## Offline install (no internet)
-
-For servers with no internet access — or where the GitHub download is blocked:
-
-1. Copy `offline/x-ui-linux-amd64.tar.gz` and `install_offline.sh` to the server (any folder).
-2. Run:
+To install a specific version, append its tag (e.g. `v3.7.0`):
 
 ```bash
-chmod +x install_offline.sh
-sudo ./install_offline.sh                 # auto-detects the .tar.gz in the current dir
-# or pass it explicitly:
-sudo ./install_offline.sh /root/x-ui-linux-amd64.tar.gz
+bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) v3.7.0
 ```
 
-It makes **zero network calls** for the bundle (binary + Xray + geo all come from the tarball), prints the generated credentials **and the API token**, and on upgrade **preserves your existing `/etc/x-ui/x-ui.db`** while running migrations (including the RBAC tables). See [`offline/README.md`](offline/README.md) for details.
+To install the rolling **dev** build (latest per-commit pre-release from `main`, not a stable release), pass `dev-latest`:
 
-> The prebuilt offline bundle is **amd64 / x86_64 only**. For other architectures, build a bundle for that arch from source.
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) dev-latest
+```
 
-## Supported platforms
+During installation a random username, password, and access path are generated. After installation, run `x-ui` to open the management menu, where you can start/stop the service, view or reset your login credentials, manage SSL certificates, and more.
 
-**Operating systems:** Ubuntu, Debian, Armbian, Fedora, CentOS, RHEL, AlmaLinux, Rocky Linux, Oracle Linux, Amazon Linux, Arch, Manjaro, openSUSE, Alpine, and Windows.
+Every release asset is published with a `.sha256` sum next to it. Both `install.sh` and the updater verify the archive against that sum and abort on a mismatch.
 
-**Architectures:** `amd64` · `arm64` (aarch64) · `armv7` · `armv6` · `386` · `s390x`.
+For full documentation — installation, configuration, operations, and the complete API reference — visit **[docs.sanaei.dev](https://docs.sanaei.dev)**.
 
-## Database
+### Unattended install
 
-- **SQLite** (default) — a single file at `/etc/x-ui/x-ui.db`. Zero setup, ideal for small/medium deployments.
-- **PostgreSQL** — recommended for high client counts or multi-node setups.
+The installer also runs **non-interactively** for cloud-init.
+Set `XUI_NONINTERACTIVE=1` (or pipe with no TTY) and it installs end-to-end with
+zero prompts, generating random credentials and writing them to
+`/etc/x-ui/install-result.env`. See [`deploy/`](deploy/) for:
 
-Migrate an existing SQLite install to PostgreSQL (all RBAC data included):
+- [Cloud-init user-data](deploy/cloud-init/) — unattended install on any cloud (Hetzner/AWS/DO/Vultr/GCP/Azure/Oracle)
+- [Hetzner Cloud notes](deploy/marketplace/hetzner/) — cloud-init deployment on Hetzner
+
+## Supported Platforms
+
+**Operating systems:** Ubuntu, Debian, Armbian, Fedora, CentOS, RHEL, AlmaLinux, Rocky Linux, Oracle Linux, Amazon Linux, Virtuozzo, Arch, Manjaro, Parch, openSUSE (Tumbleweed / Leap), Alpine, and Windows.
+
+**Architectures:** `amd64` · `386` · `arm64` (aarch64) · `armv7` · `armv6` · `armv5` · `s390x`.
+
+## Database Options
+
+3X-UI supports two backends, chosen during the install:
+
+- **SQLite** (default) — a single file at `/etc/x-ui/x-ui.db`. Zero setup, ideal for small and medium deployments.
+- **PostgreSQL** — recommended for high client counts or multi-node setups. The installer can install PostgreSQL locally for you, or accept a DSN to an existing server.
+
+At runtime the backend is selected via environment variables (the installer writes these to `/etc/default/x-ui` for you):
+
+```
+XUI_DB_TYPE=postgres
+XUI_DB_DSN=postgres://xui:password@127.0.0.1:5432/xui?sslmode=disable
+```
+
+### Migrating an existing SQLite install to PostgreSQL
 
 ```bash
 x-ui migrate-db --dsn "postgres://xui:password@127.0.0.1:5432/xui?sslmode=disable"
@@ -112,7 +133,21 @@ x-ui migrate-db --dsn "postgres://xui:password@127.0.0.1:5432/xui?sslmode=disabl
 systemctl restart x-ui
 ```
 
-The source SQLite file is left untouched; remove it once you have verified the new backend.
+The source SQLite file is left untouched; remove it manually once you have verified the new backend.
+
+### Docker
+
+The default `docker compose up -d` keeps using SQLite. To run with the bundled PostgreSQL service, uncomment the two `XUI_DB_*` env lines in `docker-compose.yml` and start with the profile:
+
+```bash
+docker compose --profile postgres up -d
+```
+
+The image bundles Fail2ban (enabled by default) to enforce per-client **IP limits**. Fail2ban bans offenders with `iptables`, which requires the `NET_ADMIN` capability. `docker-compose.yml` already grants it via `cap_add`; if you start the container with `docker run` instead, add the capabilities yourself, otherwise bans are logged but never applied:
+
+```bash
+docker run -d --cap-add=NET_ADMIN --cap-add=NET_RAW ... ghcr.io/mhsanaei/3x-ui
+```
 
 ## Environment Variables
 
@@ -121,9 +156,24 @@ The source SQLite file is left untouched; remove it once you have verified the n
 | `XUI_DB_TYPE` | Database backend: `sqlite` or `postgres` | `sqlite` |
 | `XUI_DB_DSN` | PostgreSQL connection string (when `XUI_DB_TYPE=postgres`) | — |
 | `XUI_DB_FOLDER` | Directory for the SQLite database file | `/etc/x-ui` |
+| `XUI_DB_MAX_OPEN_CONNS` | Maximum open connections (PostgreSQL pool) | — |
+| `XUI_DB_MAX_IDLE_CONNS` | Maximum idle connections (PostgreSQL pool) | — |
 | `XUI_INIT_WEB_BASE_PATH` | The initial URI path for the web panel | `/` |
 | `XUI_ENABLE_FAIL2BAN` | Enable Fail2ban-based IP-limit enforcement | `true` |
 | `XUI_LOG_LEVEL` | Log verbosity (`debug`, `info`, `warning`, `error`) | `info` |
+| `XUI_DEBUG` | Enable debug mode | `false` |
+| `XUI_TUNNEL_HEALTH_MONITOR` | Enable the tunnel health monitor (probes a URL and restarts xray after repeated failures; a restart drops all clients) | `false` |
+| `XUI_TUNNEL_HEALTH_PROXY` | Proxy the probe is sent through; point it at a local xray inbound so the probe tests the tunnel (e.g. `socks5://127.0.0.1:1080`). Empty means the probe only checks host connectivity | — |
+| `XUI_TUNNEL_HEALTH_URL` | URL probed for tunnel health | `https://www.cloudflare.com/cdn-cgi/trace` |
+| `XUI_TUNNEL_HEALTH_INTERVAL` | Interval between probes | `30s` |
+| `XUI_TUNNEL_HEALTH_TIMEOUT` | Per-probe timeout | `10s` |
+| `XUI_TUNNEL_HEALTH_FAILURES` | Consecutive failures before a restart is triggered | `3` |
+| `XUI_TUNNEL_HEALTH_COOLDOWN` | Minimum delay between consecutive restarts | `5m` |
+| `NODE_TOKEN_ENCRYPTION` | Encryption at rest for node API tokens: `off`, `migration`, or `required` (note: no `XUI_` prefix) | `off` |
+| `XUI_NODE_TOKEN_KEY_FILE` | JSON keyring (mode `0600`) holding the active key id and its base64 32-byte keys | `/etc/x-ui/node_token_key.json` |
+| `XUI_NODE_TOKEN_KEY` | A single base64 32-byte key, used only when the key file cannot be loaded | — |
+
+The complete list is on the [environment variables reference](https://docs.sanaei.dev/docs/reference/env-vars).
 
 ## Supported Languages
 
@@ -131,13 +181,56 @@ The panel UI is available in 13 languages:
 
 English · فارسی · العربية · 中文（简体） · 中文（繁體） · Español · Русский · Українська · Türkçe · Tiếng Việt · 日本語 · Bahasa Indonesia · Português (Brasil)
 
-## Documentation
+## Contributing
 
-- [Capturing the real client IP](docs/real-client-ip.md) (behind Cloudflare / L4 relays).
-- [Custom subscription templates](docs/custom-subscription-templates.md).
+Contributions are welcome. Please read the [Contributing Guide](/CONTRIBUTING.md) before opening an issue or pull request.
 
-## Credits & License
+## A Special Thanks to
 
-This project is a fork of **[MHSanaei/3X-UI](https://github.com/MHSanaei/3x-ui)** and builds on [Xray-core](https://github.com/XTLS/Xray-core) and the original X-UI by [alireza0](https://github.com/alireza0/). Geo routing rules: [Iran v2ray rules](https://github.com/chocolate4u/Iran-v2ray-rules) & [Russia v2ray rules](https://github.com/runetfreedom/russia-v2ray-rules-dat).
+- [alireza0](https://github.com/alireza0/)
 
-Licensed under **GPL-3.0**, the same as the upstream project.
+## Acknowledgment
+
+- [Iran v2ray rules](https://github.com/chocolate4u/Iran-v2ray-rules) (License: **GPL-3.0**): _Enhanced v2ray/xray and v2ray/xray-clients routing rules with built-in Iranian domains and a focus on security and adblocking._
+- [Russia v2ray rules](https://github.com/runetfreedom/russia-v2ray-rules-dat) (License: **GPL-3.0**): _This repository contains automatically updated V2Ray routing rules based on data on blocked domains and addresses in Russia._
+
+## Community Tools
+
+Tools and integrations built by the community around 3x-ui.
+
+- [terraform-provider-3x-ui](https://github.com/batonogov/terraform-provider-threexui) (License: **MIT**): _Manage inbounds, clients, panel settings, and Xray configuration as code with Terraform / OpenTofu._
+- [3X-UI Manager](https://github.com/yukh975/3X-UI-Manager) (License: **MIT**): _Native Android client for 3x-ui — dashboard, inbounds, clients with QR sharing, nodes and multi-panel management. Available on F-Droid._
+
+## Support project
+
+**If this project is helpful to you, you may wish to give it a**:star2:
+
+<a href="https://www.buymeacoffee.com/MHSanaei" target="_blank">
+<img src="./media/default-yellow.png" alt="Buy Me A Coffee" style="height: 70px !important;width: 277px !important;" >
+</a>
+
+</br>
+<a href="https://nowpayments.io/donation/hsanaei" target="_blank" rel="noreferrer noopener">
+   <img src="./media/donation-button-black.svg" alt="Crypto donation button by NOWPayments">
+</a>
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=mhsanaei%2F3x-ui&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=mhsanaei/3x-ui&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=mhsanaei/3x-ui&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=mhsanaei/3x-ui&type=date&legend=top-left" />
+ </picture>
+</a>
+
+<p align="center">
+ <a href="https://www.star-history.com/mhsanaei/3x-ui">
+  <picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=rank&theme=dark" /><source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=rank" /><img alt="Star History Rank" src="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=rank" /></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=trending&theme=dark" /><source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=trending" /><img alt="GitHub Trending Repository of the Day" src="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=trending" /></picture>
+ </a>
+</p>
+
+
+## Multi-admin RBAC overlay
+
+This repository starts from official MHSanaei/3x-ui v3.8.5 and ports multi-admin role management, scoped reseller access, custom roles, and the Admins page. Release is gated on passing CI.

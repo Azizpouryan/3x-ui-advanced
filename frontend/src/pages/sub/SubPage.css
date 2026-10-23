@@ -653,91 +653,72 @@ a.sub-row-title:hover {
   color: var(--ant-color-text-tertiary);
 }
 
-/* ---- Branding ------------------------------------------------------------
- * Everything below reacts to the custom properties brandingCssVars() sets on
- * the page wrapper. All of them have a fallback, so a page with no branding
- * (or a partial one) renders exactly as it did before the feature existed. */
-
-.subscription-page.has-brand-bg {
-  background-image: var(--brand-bg-image);
-  background-size: cover;
-  background-position: center;
-  background-attachment: fixed;
+.sub-footer::before {
+  top: 0;
 }
 
-/* The card is what floats over a background image, so the opacity control
- * applies to its surface rather than the whole page — text stays readable. */
-.subscription-page.has-brand-glass .subscription-card {
-  background-color: color-mix(in srgb, var(--bg-card) calc(var(--brand-card-opacity, 1) * 100%), transparent);
-  backdrop-filter: blur(10px);
-}
-
-.subscription-page .subscription-card {
-  border-radius: var(--brand-card-radius, 12px);
-}
-
-.subscription-page[style*="--brand-text"] .subscription-card,
-.subscription-page[style*="--brand-text"] .subscription-card .ant-card-head-title {
-  color: var(--brand-text);
-}
-
-.brand-header {
-  display: flex;
+.sub-footer > span,
+.sub-footer > a {
+  display: inline-flex;
   align-items: center;
-  gap: 12px;
-  padding: 4px 0;
+  gap: 6px;
 }
 
-.brand-logo {
-  width: 40px;
-  height: 40px;
-  object-fit: contain;
-  border-radius: 8px;
-  flex-shrink: 0;
+@media (prefers-reduced-motion: reduce) {
+  .sub-aurora::before,
+  .sub-aurora::after {
+    animation: none;
+  }
+
+  .sub-row:hover {
+    transform: none;
+  }
 }
 
-.brand-header-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
+@media (max-width: 576px) {
+  .sub-content {
+    padding: 16px 8px;
+  }
 
-.brand-name {
-  font-size: 18px;
-  font-weight: 600;
-  line-height: 1.25;
-  white-space: normal;
-}
+  .sub-card > .ant-card-body {
+    padding: 16px;
+  }
 
-.brand-tagline {
-  font-size: 12px;
-  opacity: 0.7;
-  font-weight: 400;
-  white-space: normal;
-}
+  /* One static blob: two animated 70vmax blurs drop frames on low-end phones. */
+  .sub-aurora::before {
+    animation: none;
+  }
 
-.brand-announcement {
-  padding: 10px 12px;
-  margin-bottom: 12px;
-  border-radius: 10px;
-  border: 1px solid color-mix(in srgb, var(--brand-primary, #1677ff) 35%, transparent);
-  background: color-mix(in srgb, var(--brand-primary, #1677ff) 12%, transparent);
-  white-space: pre-wrap;
-}
+  .sub-aurora::after {
+    display: none;
+  }
 
-.brand-links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  justify-content: center;
-  margin-top: 16px;
-}
+  .sub-hero {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
 
-.brand-footer {
-  margin-top: 16px;
-  text-align: center;
-  font-size: 12px;
-  opacity: 0.65;
-  white-space: pre-wrap;
-}
+  .sub-ring {
+    justify-self: center;
+  }
 
+  .sub-big-num {
+    font-size: 36px;
+  }
+
+  .sub-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sub-app-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sub-tabs .ant-tabs-tab-icon {
+    display: none;
+  }
+
+  .sub-qr-card {
+    display: none;
+  }
+}

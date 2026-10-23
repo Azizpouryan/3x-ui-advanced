@@ -1,128 +1,179 @@
 [English](/README.md) | [فارسی](/README.fa_IR.md) | [العربية](/README.ar_EG.md) | [中文](/README.zh_CN.md) | [Español](/README.es_ES.md) | [Русский](/README.ru_RU.md) | [Türkçe](/README.tr_TR.md)
 
-<div dir="rtl">
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./media/3x-ui-dark.png">
+    <img alt="3x-ui" src="./media/3x-ui-light.png">
+  </picture>
+</p>
 
-# 3X-UI — نسخه فورک با RBAC (admin6501)
+<p align="center">
+  <a href="https://github.com/MHSanaei/3x-ui/releases"><img src="https://img.shields.io/github/v/release/mhsanaei/3x-ui" alt="Release"></a>
+  <a href="https://github.com/MHSanaei/3x-ui/actions"><img src="https://img.shields.io/github/actions/workflow/status/mhsanaei/3x-ui/release.yml.svg" alt="Build"></a>
+  <a href="#"><img src="https://img.shields.io/github/go-mod/go-version/mhsanaei/3x-ui.svg" alt="GO Version"></a>
+  <a href="https://github.com/MHSanaei/3x-ui/releases/latest"><img src="https://img.shields.io/github/downloads/mhsanaei/3x-ui/total.svg" alt="Downloads"></a>
+  <a href="https://www.gnu.org/licenses/gpl-3.0.en.html"><img src="https://img.shields.io/badge/license-GPL%20V3-blue.svg?longCache=true" alt="License"></a>
+  <a href="https://pkg.go.dev/github.com/mhsanaei/3x-ui/v3"><img src="https://pkg.go.dev/badge/github.com/mhsanaei/3x-ui/v3.svg" alt="Go Reference"></a>
+  <a href="https://docs.sanaei.dev"><img src="https://img.shields.io/badge/docs-docs.sanaei.dev-22d3ee" alt="Documentation"></a>
+</p>
 
-نسخه‌ای سفارشی‌شده از [MHSanaei/3X-UI](https://github.com/MHSanaei/3x-ui) — یک پنل وب پیشرفته و متن‌باز برای مدیریت سرورهای [Xray-core](https://github.com/XTLS/Xray-core) — که با یک **سامانه چندمدیریتی مبتنی بر نقش (RBAC)**، **محدودسازی نماینده (Reseller)** و یک **نصب‌کننده کاملاً آفلاین** برای سرورهای بدون اینترنت یا تحریم‌شده گسترش یافته است.
+**3X-UI** یک پنل کنترل وب پیشرفته و متن‌باز برای مدیریت سرورهای [Xray-core](https://github.com/XTLS/Xray-core) است. این پنل یک رابط کاربری تمیز و چندزبانه برای استقرار، پیکربندی و نظارت بر طیف گسترده‌ای از پروتکل‌های پراکسی و VPN ارائه می‌دهد — از یک VPS تکی تا استقرارهای چندنودی.
+
+‏3X-UI که به‌عنوان یک فورک بهبودیافته از پروژه‌ی اصلی X-UI ساخته شده است، پشتیبانی گسترده‌تر از پروتکل‌ها، پایداری بهتر، حسابداری ترافیک به‌ازای هر کلاینت و بسیاری از ویژگی‌های رفاهی را اضافه می‌کند.
 
 > [!IMPORTANT]
-> این پروژه فقط برای استفاده شخصی در نظر گرفته شده است. لطفاً از آن برای مقاصد غیرقانونی یا در محیط تولیدی (Production) استفاده نکنید.
+> این پروژه فقط برای استفاده‌ی شخصی در نظر گرفته شده است. لطفاً از آن برای اهداف غیرقانونی یا در محیط تولید (production) استفاده نکنید.
 
-## آنچه این فورک اضافه می‌کند
+## ویژگی‌ها
 
-- **کنترل دسترسی مبتنی بر نقش (RBAC)** — مدیریت چند ادمین پنل از صفحه **ادمین‌ها**، هر کدام با یکی از چهار نقش زیر:
-  - `super_admin` — دسترسی کامل به همه‌چیز (ادمین اول/پیش‌فرض).
-  - `manager` — مدیریت ورودی‌ها و کلاینت‌ها؛ **بدون** دسترسی به تنظیمات پنل، قالب Xray یا مدیریت ادمین‌ها.
-  - `reseller` (نماینده) — فقط محدود به ورودی‌های اختصاص‌یافته؛ کلاینت‌های خودش را مدیریت می‌کند و ورودی‌هایش را فقط **مشاهده** می‌کند (نمی‌تواند ورودی را اضافه/ویرایش/فعال‌غیرفعال/حذف کند).
-  - `readonly` — می‌تواند همه‌چیز را ببیند اما هیچ عملیات نوشتنی انجام نمی‌دهد.
-- **گزارش تغییرات (Audit Log)** — هر اقدام ادمین (ساخت/ویرایش/حذف ادمین، بازنشانی رمز و …) همراه با اقدام‌کننده، هدف و زمان ثبت می‌شود.
-- **بسته نصب آفلاین** — نصب روی سروری بدون اینترنت با یک فایل tarball خودکفا (باینری پنل + Xray-core + داده‌های جغرافیایی). به [`offline/`](offline/) مراجعه کنید.
-- **بررسی‌کننده‌ی به‌روزرسانی مخصوص فورک** — «بررسی به‌روزرسانی» پنل، ریلیزها را از همین فورک (`admin6501/3x-ui`) می‌خواند.
-- **مهاجرت ایمن به PostgreSQL** — مهاجرت SQLite → PostgreSQL تمام داده‌های RBAC (ادمین‌ها، نقش‌ها، ورودی‌های مجاز، لاگ تغییرات) را کپی می‌کند.
+- **اینباندهای چندپروتکلی** — VLESS، VMess، Trojan، Shadowsocks، WireGuard، AmneziaWG، TUIC v5، Hysteria2، MTProto، HTTP، SOCKS (Mixed)، Dokodemo-door / Tunnel و TUN.
+- **ترنسپورت‌ها و امنیت مدرن** — TCP (Raw)، mKCP، WebSocket، gRPC، HTTPUpgrade و XHTTP، ایمن‌شده با TLS، XTLS و REALITY.
+- **‏AmneziaWG داخلی** — نسخه‌ی مقاوم در برابر DPI از WireGuard مستقیماً درون پنل و روی یک پشته‌ی شبکه‌ی فضای کاربر اجرا می‌شود؛ بدون ماژول کرنل، DKMS یا بسته‌های اضافی.
+- **‏TUIC v5 داخلی** — پراکسی با کارایی بالا مبتنی بر QUIC با اندازه‌گیری بومی ترافیک رله UDP، دست‌دادن‌های 0-RTT و کنترل ازدحام BBR.
+- **پراکسی‌های MTProto** — سکرت‌های FakeTLS، ad-tag و سهمیه‌ها به‌ازای هر کلاینت، که به‌صورت زنده و بدون قطع اتصال‌های موجود اعمال می‌شوند.
+- **فال‌بک (Fallback)** — ارائه‌ی چند پروتکل روی یک پورت واحد (مثلاً VLESS و Trojan روی پورت 443) با استفاده از قابلیت fallback در Xray.
+- **مدیریت به‌ازای هر کلاینت** — سهمیه‌ی ترافیک، تاریخ انقضا، محدودیت IP با امکان استثنا کردن آدرس‌های مورد اعتماد، محدودیت دستگاه (HWID)، چرخه‌های تمدید زمان‌بندی‌شده، وضعیت آنلاینِ زنده و لینک‌های اشتراک‌گذاری، کدهای QR و سابسکریپشن‌ها با یک کلیک.
+- **آمار ترافیک** — به‌ازای هر اینباند، هر کلاینت و هر اوتباند، همراه با کنترل بازنشانی (reset).
+- **پشتیبانی از چند نود** — مدیریت و مقیاس‌دهی روی چندین سرور از یک پنل واحد، از جمله کلون‌کردن اینباندها روی نودهای دیگر.
+- **اوتباند و مسیریابی** — WARP، NordVPN، PIA، قوانین مسیریابی سفارشی، متعادل‌کننده‌های بار (load balancer) با فال‌بک بین متعادل‌کننده‌ها و زنجیره‌کردن پراکسی اوتباند. دسته‌بندی‌های geosite و geoip همراه‌شده مستقیماً از ویرایشگر قوانین قابل مرور هستند.
+- **سرور سابسکریپشن داخلی** — خروجی raw، JSON و Clash که بر پایه‌ی User-Agent کلاینت به‌صورت خودکار انتخاب می‌شود، به‌همراه [قالب‌های صفحه‌ی سفارشی](docs/custom-subscription-templates.md).
+- **ربات‌های تلگرام و دیسکورد** برای نظارت و مدیریت از راه دور.
+- **‏RESTful API** با توکن‌های محدودشده (scoped) و دارای انقضای اختیاری، به‌همراه مرجع API درون‌پنل.
+- **پنل قابل نصب (PWA)** — 3X-UI را به دسکتاپ یا صفحه‌ی اصلی گوشی خود سنجاق کنید.
+- **ذخیره‌سازی منعطف** — SQLite (پیش‌فرض) یا PostgreSQL.
+- **‏۱۳ زبان رابط کاربری** با تم‌های تیره و روشن.
+- **یکپارچگی با Fail2ban** برای اعمال محدودیت IP به‌ازای هر کلاینت.
 
-## تخصیص ترافیک به ریسلر
+## اسکرین‌شات‌ها
 
-برای هر **ریسلر** یک سقف ترافیک کلی تعیین کنید و بگذارید پنل به‌صورت خودکار آن را اعمال کند:
+<details>
+<summary>برای باز شدن کلیک کنید</summary>
 
-- در صفحه‌ی **Admins** برای هر ریسلر یک **سهمیه‌ی ترافیک** (به گیگابایت) تنظیم کنید — مقدار `0` یعنی نامحدود.
-- مصرف بر اساس **مجموع آپلود + دانلود همه‌ی inboundهای اختصاص‌داده‌شده به آن ریسلر** محاسبه می‌شود.
-- وقتی ریسلر به سهمیه‌اش برسد، جاب ترافیک **همه‌ی inboundهای او را به‌صورت خودکار غیرفعال می‌کند** و بلافاصله دسترسی کاربرانش قطع می‌شود.
-- inboundهایی که این‌گونه غیرفعال شده‌اند ردیابی می‌شوند و به‌محض این‌که سهمیه را افزایش یا ریست کنید **به‌صورت خودکار دوباره فعال می‌شوند**.
-- **بیش‌فروشی (Over-sell) مجاز است** — فقط مصرف واقعی اهمیت دارد — و هر ریسلر مصرف و سهمیه‌ی خود را در داشبورد ریسلر می‌بیند.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./media/01-overview-dark.png">
+  <img alt="Overview" src="./media/01-overview-light.png">
+</picture>
 
-## امکانات اصلی (از 3X-UI)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./media/02-add-inbound-dark.png">
+  <img alt="Inbounds" src="./media/02-add-inbound-light.png">
+</picture>
 
-- **ورودی‌های چندپروتکلی** — VLESS، VMess، Trojan، Shadowsocks، WireGuard، Hysteria2، HTTP، SOCKS (Mixed)، Dokodemo-door / Tunnel و TUN.
-- **ترانسپورت و امنیت مدرن** — TCP (Raw)، mKCP، WebSocket، gRPC، HTTPUpgrade و XHTTP، ایمن‌شده با TLS، XTLS و REALITY.
-- **مدیریت هر کلاینت** — سهمیه ترافیک، تاریخ انقضا، محدودیت IP، وضعیت آنلاین زنده، لینک اشتراک‌گذاری، QR و ساب‌اسکریپشن.
-- **پشتیبانی چندنودی (Multi-node)**، خروجی و مسیریابی (WARP، قوانین سفارشی، Load Balancer).
-- **سرور ساب‌اسکریپشن داخلی** به همراه [قالب‌های صفحه سفارشی](docs/custom-subscription-templates.md).
-- **ربات تلگرام**، **API مبتنی بر REST** با Swagger داخلی، **SQLite یا PostgreSQL**، **۱۳ زبان رابط کاربری**، تم تیره/روشن و **Fail2ban** برای اعمال محدودیت IP.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./media/03-add-client-dark.png">
+  <img alt="Add client" src="./media/03-add-client-light.png">
+</picture>
 
-## امکانات و گزینه‌های پنل (این فورک)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./media/05-add-nodes-dark.png">
+  <img alt="Configs" src="./media/05-add-nodes-light.png">
+</picture>
 
-علاوه بر موارد بالا، پنل شامل این امکانات هم هست:
+</details>
 
-- **پلن‌ها / پکیج‌ها** — قالب‌های قابل استفاده مجدد برای کاربر: پیش‌پرکردن ترافیک، انقضا و محدودیت IP با یک کلیک.
-- **گروه‌های کاربر** — چند ورودی را دسته‌بندی می‌کند تا یک اشتراک، چند کانفیگ ارائه دهد.
-- **هاست‌ها (Hosts)** — انتشار endpointهای اشتراک سفارشی (آدرس، پورت، remark، SNI) برای هر ورودی.
-- **تغییر پروتکل ورودی** — پروتکل یک inbound موجود قابل تغییر است؛ کلاینت‌های آن حفظ می‌شوند (ایمیل، حجم، تاریخ انقضا، شناسه اشتراک) و فقط اعتبارنامه‌شان بازسازی می‌شود، همراه با هشدار پیش از ذخیره مبنی بر اینکه لینک‌های قبلی از کار می‌افتند.
-- **قالب Remark اشتراک** — ساخت نام لینک‌های کاربر با توکن‌های `{{VAR}}` (`EMAIL`، `INBOUND`، `TRAFFIC_LEFT`، `DAYS_LEFT`، `HOST`، …)؛ خالی‌کردن فیلد، آن را به مقدار پیش‌فرض برمی‌گرداند.
-- **فرمت‌های اضافی اشتراک** — خروجی‌های JSON و Clash (با قوانین مسیریابی اختیاری) در کنار اشتراک base64.
-- **احراز هویت دومرحله‌ای (2FA / TOTP)** برای ورود مدیران.
-- **ورود با LDAP / Active Directory** — احراز هویت مدیران پنل از طریق دایرکتوری.
-- **اعلان‌های ایمیل (SMTP)** — هشدارهای مبتنی بر رویداد با STARTTLS/TLS و دکمه‌ی ارسال ایمیل آزمایشی.
-- **وب‌هوک ترافیک خارجی** — ارسال رویدادهای ترافیک کاربر به یک URL خارجی.
-- **پشتیبانی از پروکسی MTProto (تلگرام)** از طریق sidecar به‌نام `mtg`.
-- **تقویم شمسی (جلالی) / میلادی** قابل تغییر برای همه‌ی تاریخ‌ها.
-- **صفحه‌ی آموزش‌ها در پنل** (فقط super_admin) — راهنمای سریع چندزبانه برای همه‌ی بخش‌های پنل.
-- **محدودیت دستگاه (HWID)** — تعداد دستگاه‌هایی که می‌توانند اشتراک یک کاربر را بگیرند محدود می‌شود؛ بر پایه‌ی هدر `x-hwid` که اپ‌هایی مثل Happ و Hiddify می‌فرستند. مقدار پیش‌فرض پنل به‌علاوه‌ی مقدار اختصاصی هر کاربر، فهرست دستگاه‌های قابل پاک‌کردن، و حالت سخت‌گیرانه‌ی اختیاری برای رد کردن اپ‌هایی که شناسه نمی‌فرستند.
-- **حذف کاربران منقضی** — کاربران تمام‌شده‌ی یک اینباند را از منوی همان ردیف حذف کنید، یا بگذارید پنل چند روز پس از انقضا خودکار پاکشان کند (پیش‌فرض خاموش؛ عدد ۰ یعنی هرگز حذف نشود).
-- **برندینگ صفحه‌ی اشتراک** — صفحه‌ای که کاربر در مرورگر باز می‌کند را از داخل پنل بسازید: نام برند، شعار، لوگو، اطلاعیه، رنگ‌ها، پس‌زمینه، بخش‌های قابل نمایش، دکمه‌های پشتیبانی/تلگرام/وب‌سایت و CSS سفارشی، همراه با پیش‌نمایش زنده.
-- **فروشگاه تلگرام — کیف پول و پرداخت به‌ازای مصرف** — ربات با کیف پول پیش‌پرداخت به کاربر نهایی کانفیگ می‌فروشد. کاربر کیف پولش را شارژ می‌کند (حداقل و حداکثر مبلغ هر شارژ را خودتان تعیین می‌کنید)، در صورت تمایل شما باید اول در کانال عضو شود، و بعد روی ورودی‌ای که انتخاب کرده‌اید با هر حجمی که بخواهد کانفیگ می‌سازد. **هزینه فقط بابت مصرف واقعی کم می‌شود**: قیمت هر گیگ را در پنل تعیین می‌کنید و اگر کاربر ۱۰ گیگ بگیرد و ۱ گیگ مصرف کند، تنها بهای همان یک گیگ از کیف پولش کسر می‌شود. یک اجاره‌ی روزانه‌ی اختیاری هم برای قیمت‌گذاری زمانی وجود دارد. اندازه‌گیری هر چند دقیقه انجام می‌شود؛ با تمام‌شدن موجودی کانفیگ‌های آن کاربر خاموش و با شارژ دوباره خودکار روشن می‌شوند. هر جابه‌جایی پول در یک دفتر تراکنش ثبت می‌شود تا موجودی همیشه قابل توضیح باشد. صفحه‌ی **فروشگاه تلگرام** کیف پول‌ها، درخواست‌های شارژ، کانفیگ‌ها و هزینه‌ی لحظه‌ای آن‌ها را نشان می‌دهد و امکان اصلاح دستی موجودی را می‌دهد.
-- **نقش‌های سفارشی** — در صفحه‌ی **ادمین‌ها** نقش دلخواه خود را بسازید: یک نام بگذارید، دسترسی‌های موردنظر را تیک بزنید (مشاهده/مدیریت ورودی‌ها، کلاینت‌ها، پلن‌ها، گروه‌ها، میزبان‌ها، نودها، تنظیمات پنل، پیکربندی Xray، مدیریت ادمین‌ها) و بعد مثل نقش‌های آماده به هر ادمینی بدهید. اگر گزینه‌ی *محدود به ورودی‌های تخصیص‌داده‌شده* را بزنید، آن نقش دقیقاً مثل ریسلر رفتار می‌کند و سهمیه‌هایش هم اعمال می‌شود. نقشی که هنوز در اختیار یک ادمین است حذف نمی‌شود.
-- **داشبورد ریسلر** — ریسلر بعد از ورود مستقیم به داشبورد خودش می‌رسد: نوار سهمیه‌ی ترافیک و ظرفیت کلاینت، شمارش کلاینت‌ها بر اساس وضعیت (فعال، آنلاین، نزدیک به انقضا، تمام‌شده)، تفکیک هر ورودی، کلاینت‌هایی که تا هفت روز آینده منقضی می‌شوند و تازه‌ترین کلاینت‌های ساخته‌شده.
-- **غیرفعال‌کردن ادمین، ورودی‌هایش را هم می‌خواباند** — وقتی حساب یک ریسلر غیرفعال می‌شود، ورودی‌های تخصیص‌داده‌شده به او هم خاموش می‌شوند تا مشتری‌هایش قطع شوند، نه فقط ورود خودش. با فعال‌کردن دوباره، دقیقاً همان‌ها برمی‌گردند و ورودی‌ای که خودتان دستی خاموش کرده‌اید دست‌نخورده می‌ماند.
-- **امنیت تقویت‌شده** — محافظت CSRF، هدرهای امنیتی و طول عمر نشست قابل تنظیم.
-
-## شروع سریع (آنلاین)
+## شروع سریع
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/Azizpouryan/3x-ui-advanced/main/install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
 ```
 
-در حین نصب، یک نام کاربری، رمز عبور و مسیر پایه‌ی وب تصادفی ساخته می‌شود. سپس `x-ui` را اجرا کنید تا منوی مدیریت باز شود (شروع/توقف، بازنشانی اطلاعات ورود، مدیریت SSL و …).
-
-## نصب آفلاین (بدون اینترنت)
-
-برای سرورهای بدون دسترسی به اینترنت — یا جایی که دانلود از GitHub مسدود است:
-
-۱. فایل‌های `offline/x-ui-linux-amd64.tar.gz` و `install_offline.sh` را روی سرور کپی کنید (هر پوشه‌ای).
-۲. اجرا کنید:
+برای نصب یک نسخه‌ی مشخص، تگ آن را در انتها اضافه کنید (مثلاً `v3.7.0`):
 
 ```bash
-chmod +x install_offline.sh
-sudo ./install_offline.sh                 # فایل .tar.gz موجود در پوشه فعلی را خودکار تشخیص می‌دهد
-# یا مسیر آن را صریح بدهید:
-sudo ./install_offline.sh /root/x-ui-linux-amd64.tar.gz
+bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) v3.7.0
 ```
 
-این نصب‌کننده برای بسته **هیچ تماس شبکه‌ای** برقرار نمی‌کند (باینری + Xray + geo همگی از داخل tarball می‌آیند)، اطلاعات ورود ساخته‌شده **و توکن API** را چاپ می‌کند، و هنگام ارتقا، فایل موجود `/etc/x-ui/x-ui.db` شما را **حفظ** کرده و مهاجرت‌ها (شامل جداول RBAC) را اجرا می‌کند. برای جزئیات به [`offline/README.md`](offline/README.md) مراجعه کنید.
+برای نصب نسخه‌ی غلتانِ **dev** (آخرین پیش‌انتشار به‌ازای هر کامیت از شاخه‌ی `main`، نه یک انتشار پایدار)، مقدار `dev-latest` را پاس دهید:
 
-> بسته‌ی آفلاین آماده فقط **amd64 / x86_64** است. برای معماری‌های دیگر، بسته را از روی سورس برای همان معماری بسازید.
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) dev-latest
+```
+
+در حین نصب، یک نام کاربری، رمز عبور و مسیر دسترسی تصادفی تولید می‌شود. پس از نصب، دستور `x-ui` را اجرا کنید تا منوی مدیریت باز شود؛ در آنجا می‌توانید سرویس را شروع/متوقف کنید، اطلاعات ورود خود را ببینید یا بازنشانی کنید، گواهی‌های SSL را مدیریت کنید و کارهای دیگری انجام دهید.
+
+هر فایل انتشار به‌همراه یک جمع کنترلی `.sha256` در کنارش منتشر می‌شود. هم `install.sh` و هم به‌روزرسان، آرشیو را در برابر آن جمع کنترلی بررسی می‌کنند و در صورت عدم تطابق متوقف می‌شوند.
+
+برای مستندات کامل — نصب، پیکربندی، بهره‌برداری و مرجع کامل API — به **[docs.sanaei.dev](https://docs.sanaei.dev/fa)** مراجعه کنید.
+
+### نصب بدون نظارت
+
+نصب‌کننده به‌صورت **غیرتعاملی** نیز برای cloud-init اجرا می‌شود.
+‏`XUI_NONINTERACTIVE=1` را تنظیم کنید (یا بدون TTY از طریق pipe اجرا کنید) تا نصب به‌صورت سرتاسری و بدون
+هیچ پرسشی انجام شود، اطلاعات ورود تصادفی تولید کرده و آن‌ها را در
+`/etc/x-ui/install-result.env` می‌نویسد. برای موارد زیر به [`deploy/`](deploy/) مراجعه کنید:
+
+- [user-data مربوط به Cloud-init](deploy/cloud-init/) — نصب بدون نظارت روی هر ابری (Hetzner/AWS/DO/Vultr/GCP/Azure/Oracle)
+- [یادداشت‌های Hetzner Cloud](deploy/marketplace/hetzner/) — استقرار مبتنی بر cloud-init روی Hetzner
 
 ## پلتفرم‌های پشتیبانی‌شده
 
-**سیستم‌عامل‌ها:** Ubuntu، Debian، Armbian، Fedora، CentOS، RHEL، AlmaLinux، Rocky Linux، Oracle Linux، Amazon Linux، Arch، Manjaro، openSUSE، Alpine و Windows.
+**سیستم‌عامل‌ها:** Ubuntu، Debian، Armbian، Fedora، CentOS، RHEL، AlmaLinux، Rocky Linux، Oracle Linux، Amazon Linux، Virtuozzo، Arch، Manjaro، Parch، openSUSE (Tumbleweed / Leap)، Alpine و Windows.
 
-**معماری‌ها:** `amd64` · `arm64` (aarch64) · `armv7` · `armv6` · `386` · `s390x`.
+**معماری‌ها:** `amd64` · `386` · `arm64` (aarch64) · `armv7` · `armv6` · `armv5` · `s390x`.
 
-## پایگاه داده
+## گزینه‌های پایگاه‌داده
 
-- **SQLite** (پیش‌فرض) — یک فایل در مسیر `/etc/x-ui/x-ui.db`. بدون نیاز به تنظیم، مناسب استقرارهای کوچک/متوسط.
-- **PostgreSQL** — برای تعداد کلاینت بالا یا ساختار چندنودی توصیه می‌شود.
+‏3X-UI از دو بک‌اند پشتیبانی می‌کند که در حین نصب انتخاب می‌شوند:
 
-مهاجرت یک نصب موجود SQLite به PostgreSQL (شامل تمام داده‌های RBAC):
+- **SQLite** (پیش‌فرض) — یک فایل واحد در مسیر `/etc/x-ui/x-ui.db`. بدون نیاز به تنظیمات، ایده‌آل برای استقرارهای کوچک و متوسط.
+- **PostgreSQL** — برای تعداد کلاینت بالا یا راه‌اندازی‌های چندنودی توصیه می‌شود. نصب‌کننده می‌تواند PostgreSQL را به‌صورت محلی برایتان نصب کند، یا یک DSN به یک سرور موجود را بپذیرد.
+
+در زمان اجرا، بک‌اند از طریق متغیرهای محیطی انتخاب می‌شود (نصب‌کننده این موارد را برای شما در `/etc/default/x-ui` می‌نویسد):
+
+```
+XUI_DB_TYPE=postgres
+XUI_DB_DSN=postgres://xui:password@127.0.0.1:5432/xui?sslmode=disable
+```
+
+### انتقال یک نصب موجود SQLite به PostgreSQL
 
 ```bash
 x-ui migrate-db --dsn "postgres://xui:password@127.0.0.1:5432/xui?sslmode=disable"
-# سپس XUI_DB_TYPE و XUI_DB_DSN را در /etc/default/x-ui تنظیم و سرویس را ری‌استارت کنید:
+# سپس XUI_DB_TYPE و XUI_DB_DSN را در /etc/default/x-ui تنظیم کرده و ری‌استارت کنید:
 systemctl restart x-ui
 ```
 
-فایل اصلی SQLite دست‌نخورده باقی می‌ماند؛ پس از اطمینان از بک‌اند جدید آن را حذف کنید.
+فایل اصلی SQLite دست‌نخورده باقی می‌ماند؛ پس از اطمینان از صحت بک‌اند جدید، آن را به‌صورت دستی حذف کنید.
+
+### Docker
+
+دستور پیش‌فرض `docker compose up -d` همچنان از SQLite استفاده می‌کند. برای اجرا با سرویس PostgreSQL همراه، دو خط متغیر محیطی `XUI_DB_*` را در `docker-compose.yml` از حالت کامنت خارج کنید و با پروفایل زیر اجرا کنید:
+
+```bash
+docker compose --profile postgres up -d
+```
+
+این ایمیج، Fail2ban را (که به‌صورت پیش‌فرض فعال است) برای اعمال **محدودیت‌های IP** به‌ازای هر کلاینت همراه دارد. ‏Fail2ban متخلفان را با `iptables` مسدود می‌کند که به مجوز `NET_ADMIN` نیاز دارد. فایل `docker-compose.yml` این مجوز را از قبل از طریق `cap_add` می‌دهد؛ اگر به‌جای آن کانتینر را با `docker run` اجرا می‌کنید، خودتان مجوزها را اضافه کنید، در غیر این صورت مسدودسازی‌ها فقط ثبت می‌شوند اما هرگز اعمال نمی‌شوند:
+
+```bash
+docker run -d --cap-add=NET_ADMIN --cap-add=NET_RAW ... ghcr.io/mhsanaei/3x-ui
+```
 
 ## متغیرهای محیطی
 
-| متغیر | توضیح | پیش‌فرض |
+| متغیر | توضیحات | پیش‌فرض |
 | --- | --- | --- |
-| `XUI_DB_TYPE` | بک‌اند پایگاه داده: `sqlite` یا `postgres` | `sqlite` |
-| `XUI_DB_DSN` | رشته اتصال PostgreSQL (وقتی `XUI_DB_TYPE=postgres`) | — |
-| `XUI_DB_FOLDER` | پوشه فایل پایگاه‌داده SQLite | `/etc/x-ui` |
-| `XUI_INIT_WEB_BASE_PATH` | مسیر اولیه URI پنل وب | `/` |
+| `XUI_DB_TYPE` | بک‌اند پایگاه‌داده: `sqlite` یا `postgres` | `sqlite` |
+| `XUI_DB_DSN` | رشته‌ی اتصال PostgreSQL (وقتی `XUI_DB_TYPE=postgres`) | — |
+| `XUI_DB_FOLDER` | پوشه‌ی فایل پایگاه‌داده‌ی SQLite | `/etc/x-ui` |
+| `XUI_DB_MAX_OPEN_CONNS` | حداکثر اتصالات باز (استخر PostgreSQL) | — |
+| `XUI_DB_MAX_IDLE_CONNS` | حداکثر اتصالات بی‌کار (استخر PostgreSQL) | — |
+| `XUI_INIT_WEB_BASE_PATH` | مسیر URI اولیه برای پنل وب | `/` |
 | `XUI_ENABLE_FAIL2BAN` | فعال‌سازی اعمال محدودیت IP مبتنی بر Fail2ban | `true` |
-| `XUI_LOG_LEVEL` | سطح لاگ (`debug`، `info`، `warning`، `error`) | `info` |
+| `XUI_LOG_LEVEL` | سطح گزارش‌گیری (`debug`، `info`، `warning`، `error`) | `info` |
+| `XUI_DEBUG` | فعال‌سازی حالت دیباگ | `false` |
+| `XUI_TUNNEL_HEALTH_MONITOR` | فعال‌سازی پایشگر سلامت تونل (یک URL را پروب می‌کند و پس از خطاهای مکرر، xray را ری‌استارت می‌کند؛ یک ری‌استارت همه‌ی کلاینت‌ها را قطع می‌کند) | `false` |
+| `XUI_TUNNEL_HEALTH_PROXY` | پراکسی‌ای که پروب از طریق آن ارسال می‌شود؛ آن را به یک اینباند محلی xray اشاره دهید تا پروب خودِ تونل را آزمایش کند (مثلاً `socks5://127.0.0.1:1080`). خالی بودن یعنی پروب فقط اتصال به هاست را بررسی می‌کند | — |
+| `XUI_TUNNEL_HEALTH_URL` | URL ای که برای سلامت تونل پروب می‌شود | `https://www.cloudflare.com/cdn-cgi/trace` |
+| `XUI_TUNNEL_HEALTH_INTERVAL` | فاصله‌ی زمانی بین پروب‌ها | `30s` |
+| `XUI_TUNNEL_HEALTH_TIMEOUT` | مهلت زمانی هر پروب | `10s` |
+| `XUI_TUNNEL_HEALTH_FAILURES` | تعداد خطاهای متوالی پیش از آن‌که یک ری‌استارت فعال شود | `3` |
+| `XUI_TUNNEL_HEALTH_COOLDOWN` | حداقل تأخیر بین ری‌استارت‌های متوالی | `5m` |
+| `NODE_TOKEN_ENCRYPTION` | رمزگذاری توکن‌های API نود در حالت سکون: `off`، `migration` یا `required` (بدون پیشوند `XUI_`) | `off` |
+| `XUI_NODE_TOKEN_KEY_FILE` | حلقه‌کلید JSON (با دسترسی `0600`) شامل شناسه‌ی کلید فعال و کلیدهای ۳۲ بایتی base64 | `/etc/x-ui/node_token_key.json` |
+| `XUI_NODE_TOKEN_KEY` | یک کلید ۳۲ بایتی base64 که تنها در صورت بارگذاری‌نشدن فایل کلید استفاده می‌شود | — |
+
+فهرست کامل در [مرجع متغیرهای محیطی](https://docs.sanaei.dev/fa/docs/reference/env-vars) موجود است.
 
 ## زبان‌های پشتیبانی‌شده
 
@@ -130,15 +181,51 @@ systemctl restart x-ui
 
 English · فارسی · العربية · 中文（简体） · 中文（繁體） · Español · Русский · Українська · Türkçe · Tiếng Việt · 日本語 · Bahasa Indonesia · Português (Brasil)
 
-## مستندات
+## مشارکت
 
-- [دریافت IP واقعی کلاینت](docs/real-client-ip.md) (پشت Cloudflare / رله‌های L4).
-- [قالب‌های ساب‌اسکریپشن سفارشی](docs/custom-subscription-templates.md).
+از مشارکت‌ها استقبال می‌شود. لطفاً پیش از باز کردن issue یا pull request، [راهنمای مشارکت](/CONTRIBUTING.md) را مطالعه کنید.
 
-## اعتبارها و مجوز
+## تشکر ویژه از
 
-این پروژه یک فورک از **[MHSanaei/3X-UI](https://github.com/MHSanaei/3x-ui)** است و بر پایه [Xray-core](https://github.com/XTLS/Xray-core) و نسخه اصلی X-UI اثر [alireza0](https://github.com/alireza0/) ساخته شده است. قوانین مسیریابی جغرافیایی: [Iran v2ray rules](https://github.com/chocolate4u/Iran-v2ray-rules) و [Russia v2ray rules](https://github.com/runetfreedom/russia-v2ray-rules-dat).
+- [alireza0](https://github.com/alireza0/)
 
-تحت مجوز **GPL-3.0** منتشر شده است، همانند پروژه اصلی.
+## قدردانی
 
-</div>
+- [Iran v2ray rules](https://github.com/chocolate4u/Iran-v2ray-rules) (مجوز: **GPL-3.0**): _قوانین مسیریابی بهبود یافته v2ray/xray و v2ray/xray-clients با دامنه‌های ایرانی داخلی و تمرکز بر امنیت و مسدود کردن تبلیغات._
+- [Russia v2ray rules](https://github.com/runetfreedom/russia-v2ray-rules-dat) (مجوز: **GPL-3.0**): _این مخزن شامل قوانین مسیریابی V2Ray به‌روزرسانی شده خودکار بر اساس داده‌های دامنه‌ها و آدرس‌های مسدود شده در روسیه است._
+
+## ابزارهای جامعه
+
+ابزارها و یکپارچه‌سازی‌هایی که توسط جامعه پیرامون 3x-ui ساخته شده‌اند.
+
+- [terraform-provider-3x-ui](https://github.com/batonogov/terraform-provider-threexui) (مجوز: **MIT**): _مدیریت اینباندها، کلاینت‌ها، تنظیمات پنل و پیکربندی Xray به‌صورت کد با Terraform / OpenTofu._
+- [3X-UI Manager](https://github.com/yukh975/3X-UI-Manager) (مجوز: **MIT**): _کلاینت بومی اندروید برای 3x-ui — داشبورد، اینباندها، کلاینت‌ها با اشتراک‌گذاری QR، نودها و مدیریت چند پنل. در F-Droid در دسترس است._
+
+## پشتیبانی از پروژه
+
+**اگر این پروژه برای شما مفید است، می‌توانید به آن یک**:star2: بدهید
+
+<a href="https://www.buymeacoffee.com/MHSanaei" target="_blank">
+<img src="./media/default-yellow.png" alt="Buy Me A Coffee" style="height: 70px !important;width: 277px !important;" >
+</a>
+
+</br>
+<a href="https://nowpayments.io/donation/hsanaei" target="_blank" rel="noreferrer noopener">
+   <img src="./media/donation-button-black.svg" alt="Crypto donation button by NOWPayments">
+</a>
+
+## تاریخچه ستاره‌ها
+
+<a href="https://www.star-history.com/?repos=mhsanaei%2F3x-ui&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=mhsanaei/3x-ui&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=mhsanaei/3x-ui&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=mhsanaei/3x-ui&type=date&legend=top-left" />
+ </picture>
+</a>
+
+<p align="center">
+ <a href="https://www.star-history.com/mhsanaei/3x-ui">
+  <picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=rank&theme=dark" /><source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=rank" /><img alt="Star History Rank" src="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=rank" /></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=trending&theme=dark" /><source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=trending" /><img alt="GitHub Trending Repository of the Day" src="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=trending" /></picture>
+ </a>
+</p>

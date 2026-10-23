@@ -4,6 +4,7 @@ import { Button, Divider, Input, Modal, QRCode, message } from 'antd';
 import * as OTPAuth from 'otpauth';
 
 import { ClipboardManager } from '@/utils';
+import { activateOnKey } from '@/utils/a11y';
 import { TotpCodeSchema } from '@/schemas/login';
 import './TwoFactorModal.css';
 
@@ -94,43 +95,66 @@ export default function TwoFactorModal({
         title={title}
         closable
         onCancel={onCancel}
-      footer={[
-        <Button key="cancel" onClick={onCancel}>{t('cancel')}</Button>,
-        <Button key="ok" type="primary" disabled={!TotpCodeSchema.safeParse(enteredCode).success} onClick={onOk}>
-          {t('confirm')}
-        </Button>,
-      ]}
-    >
-      {type === 'set' ? (
-        <>
-          <p>{t('pages.settings.security.twoFactorModalSteps')}</p>
-          <Divider />
-          <p>{t('pages.settings.security.twoFactorModalFirstStep')}</p>
-          <div className="qr-wrap">
-            <QRCode
-              className="qr-code"
-              value={qrValue}
-              size={180}
-              type="svg"
-              bordered={false}
-              color="#000000"
-              bgColor="#ffffff"
-              errorLevel="L"
-              title={t('copy')}
+        footer={[
+          <Button key="cancel" onClick={onCancel}>
+            {t('cancel')}
+          </Button>,
+          <Button
+            key="ok"
+            type="primary"
+            disabled={!TotpCodeSchema.safeParse(enteredCode).success}
+            onClick={onOk}
+          >
+            {t('confirm')}
+          </Button>,
+        ]}
+      >
+        {type === 'set' ? (
+          <>
+            <p>{t('pages.settings.security.twoFactorModalSteps')}</p>
+            <Divider />
+            <p>{t('pages.settings.security.twoFactorModalFirstStep')}</p>
+            <div
+              className="qr-wrap"
+              role="button"
+              tabIndex={0}
+              aria-label={t('copy')}
               onClick={copyToken}
+              onKeyDown={activateOnKey(copyToken)}
+            >
+              <QRCode
+                className="qr-code"
+                value={qrValue}
+                size={180}
+                type="svg"
+                bordered={false}
+                color="#000000"
+                bgColor="#ffffff"
+                errorLevel="L"
+                title={t('copy')}
+              />
+              <span className="qr-token">{token}</span>
+            </div>
+            <Divider />
+            <p>{t('pages.settings.security.twoFactorModalSecondStep')}</p>
+            <Input
+              value={enteredCode}
+              onChange={(e) => setEnteredCode(e.target.value)}
+              style={{ width: '100%' }}
+              aria-label={t('twoFactorCode')}
             />
-            <span className="qr-token">{token}</span>
-          </div>
-          <Divider />
-          <p>{t('pages.settings.security.twoFactorModalSecondStep')}</p>
-          <Input value={enteredCode} onChange={(e) => setEnteredCode(e.target.value)} style={{ width: '100%' }} />
-        </>
-      ) : (
-        <>
-          <p>{description}</p>
-          <Input value={enteredCode} onChange={(e) => setEnteredCode(e.target.value)} style={{ width: '100%' }} />
-        </>
-      )}
+          </>
+        ) : (
+          <>
+            <p>{description}</p>
+            <Input
+              value={enteredCode}
+              onChange={(e) => setEnteredCode(e.target.value)}
+              style={{ width: '100%' }}
+              aria-label={t('twoFactorCode')}
+            />
+          </>
+        )}
       </Modal>
     </>
   );

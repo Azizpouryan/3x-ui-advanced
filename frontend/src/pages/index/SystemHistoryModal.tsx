@@ -295,53 +295,8 @@ export default function SystemHistoryModal({ open, status, onClose }: SystemHist
 
   const fetchBucket = useCallback(async () => {
     if (!activeMetric) return;
-    try {
-      const url = `/panel/api/server/history/${activeMetric.key}/${bucket}`;
-      const msg = await HttpUtil.get(url);
-      if (msg?.success && Array.isArray(msg.obj)) {
-        const vals: number[] = [];
-        const labs: string[] = [];
-        const tss: number[] = [];
-        for (const p of msg.obj) {
-          const d = new Date(p.t * 1000);
-          const hh = String(d.getHours()).padStart(2, '0');
-          const mm = String(d.getMinutes()).padStart(2, '0');
-          const ss = String(d.getSeconds()).padStart(2, '0');
-          labs.push(bucket >= 60 ? `${hh}:${mm}` : `${hh}:${mm}:${ss}`);
-          vals.push(Number(p.v) || 0);
-          tss.push(Number(p.t) || 0);
-        }
-        setLabels(labs);
-        setPoints(vals);
-        setTimestamps(tss);
-
-        const fetchAligned = async (key?: string): Promise<number[]> => {
-          if (!key) return [];
-          const m = await HttpUtil.get(`/panel/api/server/history/${key}/${bucket}`);
-          if (m?.success && Array.isArray(m.obj)) {
-            const byTs = new Map<number, number>();
-            for (const p of m.obj) byTs.set(Number(p.t) || 0, Number(p.v) || 0);
-            return tss.map((ts) => byTs.get(ts) ?? 0);
-          }
-          return [];
-        };
-        setPoints2(await fetchAligned(activeMetric.key2));
-        setPoints3(await fetchAligned(activeMetric.key3));
-      } else {
-        setLabels([]);
-        setPoints([]);
-        setPoints2([]);
-        setPoints3([]);
-        setTimestamps([]);
-      }
-    } catch (e) {
-      console.error('Failed to fetch history bucket', e);
-      setLabels([]);
-      setPoints([]);
-      setPoints2([]);
-      setPoints3([]);
-      setTimestamps([]);
-    }
+    const next = await loadBucket(activeMetric, bucket);
+    setChart(next);
   }, [activeMetric, bucket]);
 
   const [wasOpen, setWasOpen] = useState(false);
@@ -385,14 +340,13 @@ export default function SystemHistoryModal({ open, status, onClose }: SystemHist
             onChange={setBucket}
             options={[
               { value: 2, label: '2m' },
-              { value: 30, label: '30m' },
               { value: 60, label: '1h' },
-              { value: 120, label: '2h' },
               { value: 180, label: '3h' },
-              { value: 300, label: '5h' },
+              { value: 360, label: '6h' },
               { value: 720, label: '12h' },
               { value: 1440, label: '24h' },
-              { value: 2880, label: '48h' },
+              { value: 2880, label: '2d' },
+              { value: 10080, label: '7d' },
             ]}
           />
         </div>

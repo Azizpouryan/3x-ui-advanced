@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
@@ -49,6 +50,44 @@ func (s *ClientService) EffectiveFlow(tx *gorm.DB, recordId int) (string, error)
 	return flows[0], nil
 }
 
+// EffectiveFlowsByEmails resolves the intended flow (non-empty flow_override,
+// lowest inbound_id first — same rule as EffectiveFlow) for many clients in one
+// query, keyed by email. Emails absent from the result carry no flow anywhere.
+// Batched so flow restoration on an inbound with many clients is O(1) queries
+// instead of O(clients). Used to restore a stripped flow onto an inbound that
+// has just become flow-eligible.
+func (s *ClientService) EffectiveFlowsByEmails(tx *gorm.DB, emails []string) (map[string]string, error) {
+	if tx == nil {
+		tx = database.GetDB()
+	}
+	out := make(map[string]string, len(emails))
+	if len(emails) == 0 {
+		return out, nil
+	}
+	type row struct {
+		Email string
+		Flow  string `gorm:"column:flow_override"`
+	}
+	for _, batch := range chunkStrings(emails, sqlInChunk) {
+		var rows []row
+		err := tx.Table("client_inbounds").
+			Select("clients.email AS email, client_inbounds.flow_override AS flow_override").
+			Joins("JOIN clients ON clients.id = client_inbounds.client_id").
+			Where("clients.email IN ? AND client_inbounds.flow_override <> ?", batch, "").
+			Order("client_inbounds.inbound_id ASC").
+			Scan(&rows).Error
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rows {
+			if _, seen := out[r.Email]; !seen { // ordered by inbound_id ASC → first = lowest
+				out[r.Email] = r.Flow
+			}
+		}
+	}
+	return out, nil
+}
+
 func (s *ClientService) GetInboundIdsForEmail(tx *gorm.DB, email string) ([]int, error) {
 	if tx == nil {
 		tx = database.GetDB()
@@ -65,24 +104,13 @@ func (s *ClientService) GetInboundIdsForEmail(tx *gorm.DB, email string) ([]int,
 	return ids, nil
 }
 
-// GetInboundIdsForSubId returns the union of inbounds reachable through a
-// subscription id. One subId can cover several clients, so the caller gets
-// every inbound any of them is attached to — a scope check must hold for the
-// whole set, not a single client.
-func (s *ClientService) GetInboundIdsForSubId(tx *gorm.DB, subId string) ([]int, error) {
-	if tx == nil {
-		tx = database.GetDB()
+func (s *ClientService) GetRecordsByTgID(tgId int64) ([]*model.ClientRecord, error) {
+	if tgId <= 0 {
+		return nil, errors.New("tg_id must be a positive integer")
 	}
-	var ids []int
-	err := tx.Table("client_inbounds").
-		Distinct("client_inbounds.inbound_id").
-		Joins("JOIN clients ON clients.id = client_inbounds.client_id").
-		Where("clients.sub_id = ?", subId).
-		Scan(&ids).Error
-	if err != nil {
-		return nil, err
-	}
-	return ids, nil
+	var rows []*model.ClientRecord
+	err := database.GetDB().Where("tg_id = ?", tgId).Find(&rows).Error
+	return rows, err
 }
 
 func (s *ClientService) GetByID(id int) (*model.ClientRecord, error) {

@@ -1,18 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button, Checkbox, Form, Modal, Space } from 'antd';
+import { Button, Checkbox, Form, Modal, Select, Space } from 'antd';
 import { DownloadOutlined, SyncOutlined } from '@ant-design/icons';
 
 import { HttpUtil, FileManager, PromiseUtil } from '@/utils';
+import { activateOnKey } from '@/utils/a11y';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { parseLogLine } from './logParse';
 import './LogModal.css';
-import OptionButtons from '@/components/form/OptionButtons';
 
 interface LogModalProps {
   open: boolean;
   onClose: () => void;
 }
+
+const AUTO_UPDATE_INTERVAL = 5000;
 
 export default function LogModal({ open, onClose }: LogModalProps) {
   const { t } = useTranslation();
@@ -20,12 +22,11 @@ export default function LogModal({ open, onClose }: LogModalProps) {
   const [rows, setRows] = useState('20');
   const [level, setLevel] = useState('info');
   const [syslog, setSyslog] = useState(false);
+  const [autoUpdate, setAutoUpdate] = useState(false);
   const [loading, setLoading] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
-  const openRef = useRef(open);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const runRefresh = useCallback(async () => {
     try {
       const msg = await HttpUtil.post<string[]>(`/panel/api/server/logs/${rows}`, {
         level,
@@ -40,14 +41,34 @@ export default function LogModal({ open, onClose }: LogModalProps) {
     }
   }, [rows, level, syslog]);
 
+  const refresh = useCallback(() => {
+    setLoading(true);
+    void runRefresh();
+  }, [runRefresh]);
+
+  const refreshRef = useRef(refresh);
   useEffect(() => {
-    openRef.current = open;
-    if (open) refresh();
-  }, [open, refresh]);
+    refreshRef.current = refresh;
+  });
+
+  // The spinner is raised during render so the fetch effect stays side-effect
+  // free until its response lands.
+  const refreshKey = open ? `${rows}\u0000${level}\u0000${syslog}` : null;
+  const [loadingKey, setLoadingKey] = useState<string | null>(null);
+  if (refreshKey !== loadingKey) {
+    setLoadingKey(refreshKey);
+    if (refreshKey) setLoading(true);
+  }
 
   useEffect(() => {
-    if (openRef.current) refresh();
-  }, [rows, level, syslog, refresh]);
+    if (open) void runRefresh();
+  }, [open, runRefresh]);
+
+  useEffect(() => {
+    if (!open || !autoUpdate) return;
+    const id = setInterval(() => refreshRef.current(), AUTO_UPDATE_INTERVAL);
+    return () => clearInterval(id);
+  }, [open, autoUpdate]);
 
   const parsedLogs = useMemo(() => logs.map(parseLogLine), [logs]);
 
@@ -58,7 +79,15 @@ export default function LogModal({ open, onClose }: LogModalProps) {
   const titleNode = (
     <>
       {t('pages.index.logs')}
-      <SyncOutlined spin={loading} className="reload-icon" onClick={refresh} />
+      <SyncOutlined
+        spin={loading}
+        className="reload-icon"
+        role="button"
+        tabIndex={0}
+        aria-label={t('refresh')}
+        onClick={refresh}
+        onKeyDown={activateOnKey(refresh)}
+      />
     </>
   );
 
@@ -75,30 +104,30 @@ export default function LogModal({ open, onClose }: LogModalProps) {
       <Form layout="inline" className="log-toolbar">
         <Form.Item>
           <Space.Compact>
-            <OptionButtons
+            <Select
               value={rows}
               size="small"
-              style={{ width: 70 }}
+              style={{ width: 100 }}
               onChange={setRows}
               options={[
-                { value: '10', label: '10' },
                 { value: '20', label: '20' },
                 { value: '50', label: '50' },
                 { value: '100', label: '100' },
                 { value: '500', label: '500' },
+                { value: '1000', label: '1000' },
               ]}
             />
-            <OptionButtons
+            <Select
               value={level}
               size="small"
-              style={{ width: 95 }}
+              style={{ minWidth: 95 }}
               onChange={setLevel}
               options={[
-                { value: 'debug', label: 'Debug' },
-                { value: 'info', label: 'Info' },
-                { value: 'notice', label: 'Notice' },
-                { value: 'warning', label: 'Warning' },
-                { value: 'err', label: 'Error' },
+                { value: 'debug', label: t('pages.index.logLevelDebug') },
+                { value: 'info', label: t('pages.index.logLevelInfo') },
+                { value: 'notice', label: t('pages.index.logLevelNotice') },
+                { value: 'warning', label: t('pages.index.logLevelWarning') },
+                { value: 'err', label: t('pages.index.logLevelError') },
               ]}
             />
           </Space.Compact>
@@ -107,9 +136,17 @@ export default function LogModal({ open, onClose }: LogModalProps) {
           <Checkbox checked={syslog} onChange={(e) => setSyslog(e.target.checked)}>
             SysLog
           </Checkbox>
+          <Checkbox checked={autoUpdate} onChange={(e) => setAutoUpdate(e.target.checked)}>
+            {t('pages.index.autoUpdate')}
+          </Checkbox>
         </Form.Item>
         <Form.Item className="download-item">
-          <Button type="primary" onClick={download} icon={<DownloadOutlined />} />
+          <Button
+            type="primary"
+            onClick={download}
+            icon={<DownloadOutlined />}
+            aria-label={t('download')}
+          />
         </Form.Item>
       </Form>
 
@@ -145,10 +182,12 @@ export default function LogModal({ open, onClose }: LogModalProps) {
             <div key={idx} className="log-line">
               {log.stamp && <span className="log-stamp">{log.stamp}</span>}
               {log.stamp && log.levelText ? ' ' : ''}
-              {log.levelText && <span className={`log-level ${log.levelClass}`}>{log.levelText}</span>}
+              {log.levelText && (
+                <span className={`log-level ${log.levelClass}`}>{log.levelText}</span>
+              )}
               {(log.body || log.service) && (
                 <>
-                  <span> - </span>
+                  {(log.stamp || log.levelText) && <span> - </span>}
                   {log.service && <b>{log.service}</b>}
                   {log.service && log.body ? ' ' : ''}
                   <span>{log.body}</span>

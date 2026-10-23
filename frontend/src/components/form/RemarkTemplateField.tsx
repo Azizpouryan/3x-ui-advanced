@@ -86,25 +86,28 @@ export default function RemarkTemplateField({
 
   return (
     <div>
-      <Input
-        ref={inputRef}
-        value={value}
-        maxLength={maxLength}
-        placeholder={placeholder}
-        onChange={(e) => onChange?.(e.target.value)}
-        addonAfter={
-          <Popover
-            content={<RemarkVarPicker onPick={insertToken} />}
-            trigger="click"
-            placement="bottomRight"
-            title={t('pages.hosts.remarkVars.title')}
-          >
-            <Tooltip title={t('pages.hosts.remarkVars.title')}>
-              <Button type="text" size="small" icon={<CodeOutlined />} style={{ margin: '0 -7px' }} />
-            </Tooltip>
-          </Popover>
-        }
-      />
+      {multiline ? (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <Input.TextArea
+            ref={textAreaRef}
+            value={value}
+            maxLength={maxLength}
+            placeholder={placeholder}
+            rows={rows}
+            onChange={(e) => onChange?.(e.target.value)}
+          />
+          {pickerButton}
+        </div>
+      ) : (
+        <Input
+          ref={inputRef}
+          value={value}
+          maxLength={maxLength}
+          placeholder={placeholder}
+          onChange={(e) => onChange?.(e.target.value)}
+          suffix={pickerButton}
+        />
+      )}
       {hasRemarkTokens(value) && (
         <div style={{ fontSize: 12, marginTop: 4, opacity: 0.7 }}>
           {t('pages.hosts.remarkVars.preview')}:{' '}

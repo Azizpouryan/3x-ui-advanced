@@ -99,6 +99,60 @@ func TestExpandEntryLinkAppliesRemark(t *testing.T) {
 	}
 }
 
+func TestExpandEntrySubscriptionAppliesNamePrefix(t *testing.T) {
+	const subURL = "https://provider.example/sub-prefix"
+	subscriptionCache.Lock()
+	subscriptionCache.m[subURL] = subscriptionCacheEntry{
+		links:     []string{"trojan://pw@b.com:8443#HK-01"},
+		fetchedAt: time.Now(),
+	}
+	subscriptionCache.Unlock()
+	t.Cleanup(func() {
+		subscriptionCache.Lock()
+		delete(subscriptionCache.m, subURL)
+		subscriptionCache.Unlock()
+	})
+
+	got := expandEntry(externalLinkEntry{
+		Kind:       model.ExternalLinkKindSubscription,
+		Value:      subURL,
+		NamePrefix: "[zjh] ",
+		Email:      "zjh",
+	})
+	if len(got) != 1 || got[0].Name != "[zjh] HK-01" {
+		t.Fatalf("expandEntry = %#v", got)
+	}
+}
+
+func TestExpandEntryLinkFallsBackToOriginalName(t *testing.T) {
+	got := expandEntry(externalLinkEntry{Kind: model.ExternalLinkKindLink, Value: "trojan://pw@b.com:8443#orig", Remark: ""})
+	if len(got) != 1 || got[0].Name != "orig" {
+		t.Fatalf("expandEntry empty remark = %#v, want Name=orig", got)
+	}
+}
+
+func TestLinkDisplayName(t *testing.T) {
+	payload := map[string]any{"v": "2", "ps": "NL-Node", "add": "1.2.3.4", "port": "443", "id": "uuid"}
+	b, _ := json.Marshal(payload)
+	vmess := "vmess://" + base64.StdEncoding.EncodeToString(b)
+
+	cases := []struct {
+		link string
+		want string
+	}{
+		{"vless://uuid@a.com:443#one", "one"},
+		{"trojan://pw@b.com:8443#" + url.PathEscape("DE Node"), "DE Node"},
+		{vmess, "NL-Node"},
+		{"ss://def", ""},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := linkDisplayName(c.link); got != c.want {
+			t.Errorf("linkDisplayName(%q) = %q, want %q", c.link, got, c.want)
+		}
+	}
+}
+
 func TestClashProxyFromExternalTrojanReality(t *testing.T) {
 	link := "trojan://provider-pass@37.27.201.56:8443?type=tcp&security=reality&sni=aws.amazon.com&pbk=PBK&sid=298b44&fp=chrome#srv"
 	svc := NewSubClashService(false, "", NewSubService(""))

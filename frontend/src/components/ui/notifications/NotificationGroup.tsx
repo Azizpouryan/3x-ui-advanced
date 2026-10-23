@@ -47,7 +47,7 @@ export function NotificationGroup({
         />
       }
     >
-      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={8} style={{ width: '100%' }}>
         {config.events.map((event) => (
           <NotificationEvent
             key={event.key}
@@ -59,6 +59,7 @@ export function NotificationGroup({
               value:
                 Number((allSetting as unknown as Record<string, unknown>)[event.settingKey]) || 0,
               onChange: (v) => updateSetting({ [event.settingKey]: v }),
+              ariaLabel: t(`pages.settings.${event.label}`),
             })}
           </NotificationEvent>
         ))}

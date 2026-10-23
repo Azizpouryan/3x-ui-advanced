@@ -10,6 +10,77 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+// applyClientRecordMerge merges incoming client-record fields onto row using the
+// same rules everywhere a client record is persisted: scalar quota / lifecycle /
+// subscription fields are applied unconditionally (so clearing them takes
+// effect), while credentials and identifiers are only overwritten when the
+// incoming value is non-empty (so a partial update preserves the stored UUID /
+// password / keys). CreatedAt keeps the earliest known value. Email, UpdatedAt,
+// and the Id primary key are intentionally not touched here — callers handle
+// those separately. Shared by SyncInbound (per-inbound persistence) and Update
+// (the no-attached-inbound fallback) so the two paths cannot diverge.
+func applyClientRecordMerge(row *model.ClientRecord, incoming *model.ClientRecord) {
+	if incoming.UUID != "" {
+		row.UUID = incoming.UUID
+	}
+	if incoming.Password != "" {
+		row.Password = incoming.Password
+	}
+	if incoming.Auth != "" {
+		row.Auth = incoming.Auth
+	}
+	if incoming.Secret != "" {
+		row.Secret = incoming.Secret
+	}
+	if incoming.AdTag != "" {
+		row.AdTag = incoming.AdTag
+	}
+	row.Flow = incoming.Flow
+	if incoming.Security != "" {
+		row.Security = incoming.Security
+	}
+	if incoming.Reverse != "" {
+		row.Reverse = incoming.Reverse
+	}
+	if incoming.PrivateKey != "" {
+		row.PrivateKey = incoming.PrivateKey
+	}
+	if incoming.PublicKey != "" {
+		row.PublicKey = incoming.PublicKey
+	}
+	if incoming.AllowedIPs != "" {
+		row.AllowedIPs = incoming.AllowedIPs
+	}
+	row.PreSharedKey = incoming.PreSharedKey
+	row.KeepAlive = incoming.KeepAlive
+	row.SubID = incoming.SubID
+	row.LimitIP = incoming.LimitIP
+	row.TotalGB = incoming.TotalGB
+	row.ExpiryTime = incoming.ExpiryTime
+	row.Enable = incoming.Enable
+	row.TgID = incoming.TgID
+	if incoming.Group != "" {
+		row.Group = incoming.Group
+	}
+	row.Comment = incoming.Comment
+	row.Reset = incoming.Reset
+	row.ResetDay = incoming.ResetDay
+	row.ResetMax = incoming.ResetMax
+	// Guarded like Group and AdTag: a node snapshot rebuilt from settings that
+	// predate the cycle would otherwise silently erase it.
+	if incoming.TrafficReset != "" {
+		row.TrafficReset = incoming.TrafficReset
+	}
+	if incoming.TrafficResetDay > 0 {
+		row.TrafficResetDay = incoming.TrafficResetDay
+	}
+	if incoming.CreatedAt > 0 && (row.CreatedAt == 0 || incoming.CreatedAt < row.CreatedAt) {
+		row.CreatedAt = incoming.CreatedAt
+	}
+}
+
+// SyncInbound makes the inbound's client records and links match clients
+// exactly: links for clients no longer in the set are removed.
 func (s *ClientService) SyncInbound(tx *gorm.DB, inboundId int, clients []model.Client) error {
 	return s.syncInboundClients(tx, inboundId, clients, nil, true)
 }
@@ -78,37 +149,7 @@ func (s *ClientService) syncInboundClients(tx *gorm.DB, inboundId int, clients [
 		}
 
 		before := *row
-		if incoming.UUID != "" {
-			row.UUID = incoming.UUID
-		}
-		if incoming.Password != "" {
-			row.Password = incoming.Password
-		}
-		if incoming.Auth != "" {
-			row.Auth = incoming.Auth
-		}
-		row.Flow = incoming.Flow
-		if incoming.Security != "" {
-			row.Security = incoming.Security
-		}
-		if incoming.Reverse != "" {
-			row.Reverse = incoming.Reverse
-		}
-		row.SubID = incoming.SubID
-		row.LimitIP = incoming.LimitIP
-		row.HwidLimit = incoming.HwidLimit
-		row.TotalGB = incoming.TotalGB
-		row.ExpiryTime = incoming.ExpiryTime
-		row.Enable = incoming.Enable
-		row.TgID = incoming.TgID
-		if incoming.Group != "" {
-			row.Group = incoming.Group
-		}
-		row.Comment = incoming.Comment
-		row.Reset = incoming.Reset
-		if incoming.CreatedAt > 0 && (row.CreatedAt == 0 || incoming.CreatedAt < row.CreatedAt) {
-			row.CreatedAt = incoming.CreatedAt
-		}
+		applyClientRecordMerge(row, incoming)
 		preservedUpdatedAt := max(incoming.UpdatedAt, row.UpdatedAt)
 		row.UpdatedAt = preservedUpdatedAt
 
@@ -283,6 +324,37 @@ func (s *ClientService) ListForInbound(tx *gorm.DB, inboundId int) ([]model.Clie
 		Select("clients.*, client_inbounds.flow_override AS flow_override").
 		Joins("JOIN client_inbounds ON client_inbounds.client_id = clients.id").
 		Where("client_inbounds.inbound_id = ?", inboundId).
+		Order("clients.id ASC").
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]model.Client, 0, len(rows))
+	for i := range rows {
+		c := rows[i].ToClient()
+		c.Flow = rows[i].FlowOverride
+		out = append(out, *c)
+	}
+	return out, nil
+}
+
+// ListForInboundBySubId is ListForInbound narrowed to one subscription id —
+// both filter columns are indexed, so the subscription server resolves a
+// subscriber's clients without touching the inbound's settings JSON.
+func (s *ClientService) ListForInboundBySubId(tx *gorm.DB, inboundId int, subId string) ([]model.Client, error) {
+	if tx == nil {
+		tx = database.GetDB()
+	}
+	type joinedRow struct {
+		model.ClientRecord
+		FlowOverride string
+	}
+	var rows []joinedRow
+	err := tx.Table("clients").
+		Select("clients.*, client_inbounds.flow_override AS flow_override").
+		Joins("JOIN client_inbounds ON client_inbounds.client_id = clients.id").
+		Where("client_inbounds.inbound_id = ? AND clients.sub_id = ?", inboundId, subId).
 		Order("clients.id ASC").
 		Find(&rows).Error
 	if err != nil {

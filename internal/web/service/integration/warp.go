@@ -2,6 +2,7 @@ package integration
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,11 +31,11 @@ const (
 var warpAPIBase = "https://api.cloudflareclient.com/v0a4005"
 
 func (s *WarpService) GetWarpData() (string, error) {
-	return s.SettingService.GetWarp()
+	return s.GetWarp()
 }
 
 func (s *WarpService) DelWarpData() error {
-	return s.SettingService.SetWarp("")
+	return s.SetWarp("")
 }
 
 func (s *WarpService) GetWarpConfig() (string, error) {
@@ -44,7 +45,7 @@ func (s *WarpService) GetWarpConfig() (string, error) {
 	}
 
 	url := fmt.Sprintf("%s/reg/%s", warpAPIBase, warpData["device_id"])
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
@@ -70,7 +71,7 @@ func (s *WarpService) RegWarp(secretKey string, publicKey string) (string, error
 		return "", err
 	}
 
-	req, err := http.NewRequest(http.MethodPost, warpAPIBase+"/reg", bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, warpAPIBase+"/reg", bytes.NewReader(reqBody))
 	if err != nil {
 		return "", err
 	}
@@ -119,7 +120,7 @@ func (s *WarpService) RegWarp(secretKey string, publicKey string) (string, error
 	if err != nil {
 		return "", err
 	}
-	if err := s.SettingService.SetWarp(string(warpJSON)); err != nil {
+	if err := s.SetWarp(string(warpJSON)); err != nil {
 		return "", err
 	}
 
@@ -145,7 +146,7 @@ func (s *WarpService) SetWarpLicense(license string) (string, error) {
 		return "", err
 	}
 
-	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(reqBody))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPut, url, bytes.NewReader(reqBody))
 	if err != nil {
 		return "", err
 	}
@@ -170,7 +171,7 @@ func (s *WarpService) SetWarpLicense(license string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := s.SettingService.SetWarp(string(newWarpData)); err != nil {
+	if err := s.SetWarp(string(newWarpData)); err != nil {
 		return "", err
 	}
 	return string(newWarpData), nil
@@ -249,7 +250,7 @@ func (s *WarpService) ChangeWarpIP() (string, error) {
 
 // loadWarpCreds reads the stored warp JSON and ensures access_token + device_id are set.
 func (s *WarpService) loadWarpCreds() (map[string]string, error) {
-	warp, err := s.SettingService.GetWarp()
+	warp, err := s.GetWarp()
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +274,7 @@ func (s *WarpService) doWarpRequest(req *http.Request) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
 		return nil, err
 	}

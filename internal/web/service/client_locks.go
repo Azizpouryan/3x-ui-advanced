@@ -1,6 +1,8 @@
 package service
 
 import (
+	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,34 +29,18 @@ var (
 
 func lockInbound(inboundId int) *sync.Mutex {
 	inboundMutationLocksMu.Lock()
-	defer inboundMutationLocksMu.Unlock()
 	m, ok := inboundMutationLocks[inboundId]
 	if !ok {
 		m = &sync.Mutex{}
 		inboundMutationLocks[inboundId] = m
 	}
+	inboundMutationLocksMu.Unlock()
 	m.Lock()
 	return m
 }
 
-// compactOrphans drops clients that were deleted through the panel but are still
-// carried in an inbound's JSON — a node snapshot or a concurrent write can hand
-// back a list that predates the delete, and re-saving it would resurrect them.
-//
-// It removes a client only when its email is BOTH missing from client_records
-// and tombstoned by a recent delete. A missing record on its own is not proof of
-// a delete: client_records is a mirror of the inbound JSON, not its source of
-// truth, and a JSON client legitimately outlives its mirror after a partial
-// backup restore, a hand-edited inbound, or an import. Treating those as
-// deletions turned a single client add into a silent mass delete of every
-// unmirrored account on that inbound. Callers write the compacted list back and
-// then SyncInbound, which adopts the survivors and heals the mirror.
 func compactOrphans(db *gorm.DB, clients []any) []any {
 	if len(clients) == 0 {
-		return clients
-	}
-	// Nothing was deleted recently, so nothing here can be a leftover.
-	if !anyTombstones() {
 		return clients
 	}
 	emails := make([]string, 0, len(clients))
@@ -86,8 +72,7 @@ func compactOrphans(db *gorm.DB, clients []any) []any {
 	if len(existing) == len(emails) {
 		return clients
 	}
-	out := make([]any, 0, len(clients))
-	var dropped []string
+	out := make([]any, 0, len(existing))
 	for _, c := range clients {
 		cm, ok := c.(map[string]any)
 		if !ok {
@@ -101,41 +86,9 @@ func compactOrphans(db *gorm.DB, clients []any) []any {
 		}
 		if _, ok := existing[e]; ok {
 			out = append(out, c)
-			continue
 		}
-		// Unmirrored. Only a recent delete justifies removing it.
-		if isClientEmailTombstoned(e) {
-			dropped = append(dropped, e)
-			continue
-		}
-		out = append(out, c)
-	}
-	if len(dropped) > 0 {
-		logger.Debug("compactOrphans dropped just-deleted clients:", dropped)
 	}
 	return out
-}
-
-// clearTombstones drops every recorded delete. Tests use it so one case's
-// tombstones cannot leak into the next.
-func clearTombstones() {
-	recentlyDeletedMu.Lock()
-	defer recentlyDeletedMu.Unlock()
-	clear(recentlyDeleted)
-}
-
-// anyTombstones reports whether any client was deleted recently enough that a
-// stale write could still resurrect it.
-func anyTombstones() bool {
-	recentlyDeletedMu.Lock()
-	defer recentlyDeletedMu.Unlock()
-	cutoff := time.Now().Add(-deleteTombstoneTTL)
-	for _, ts := range recentlyDeleted {
-		if ts.After(cutoff) {
-			return true
-		}
-	}
-	return false
 }
 
 func tombstoneClientEmail(email string) {
@@ -201,4 +154,175 @@ func isClientEmailTombstoned(email string) bool {
 		return false
 	}
 	return true
+}
+
+// dedupeSettingsClients collapses duplicate same-email client entries inside a
+// settings JSON blob, keeping the first occurrence. Node snapshots produced by
+// builds without the addInboundClient duplicate guard can carry duplicates
+// (#5770); adopting them verbatim would copy the duplication into the central
+// inbound. Returns the filtered JSON and whether anything was removed.
+func dedupeSettingsClients(settings string) (string, bool) {
+	if settings == "" {
+		return settings, false
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(settings), &parsed); err != nil {
+		return settings, false
+	}
+	clients, _ := parsed["clients"].([]any)
+	if len(clients) < 2 {
+		return settings, false
+	}
+	seen := make(map[string]struct{}, len(clients))
+	kept := make([]any, 0, len(clients))
+	for _, c := range clients {
+		if cm, ok := c.(map[string]any); ok {
+			if email, _ := cm["email"].(string); email != "" {
+				key := strings.ToLower(email)
+				if _, dup := seen[key]; dup {
+					continue
+				}
+				seen[key] = struct{}{}
+			}
+		}
+		kept = append(kept, c)
+	}
+	if len(kept) == len(clients) {
+		return settings, false
+	}
+	parsed["clients"] = kept
+	b, err := json.MarshalIndent(parsed, "", "  ")
+	if err != nil {
+		return settings, false
+	}
+	return string(b), true
+}
+
+// stripTombstonedClients drops just-deleted client entries from a node
+// snapshot's settings JSON so adopting a stale snapshot can't re-add them to
+// the central inbound while the delete tombstone is live. Returns the filtered
+// JSON and whether anything was removed.
+func stripTombstonedClients(settings string) (string, bool) {
+	if settings == "" {
+		return settings, false
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(settings), &parsed); err != nil {
+		return settings, false
+	}
+	clients, _ := parsed["clients"].([]any)
+	if len(clients) == 0 {
+		return settings, false
+	}
+	kept := make([]any, 0, len(clients))
+	for _, c := range clients {
+		if cm, ok := c.(map[string]any); ok {
+			if email, _ := cm["email"].(string); email != "" && isClientEmailTombstoned(email) {
+				continue
+			}
+		}
+		kept = append(kept, c)
+	}
+	if len(kept) == len(clients) {
+		return settings, false
+	}
+	parsed["clients"] = kept
+	b, err := json.MarshalIndent(parsed, "", "  ")
+	if err != nil {
+		return settings, false
+	}
+	return string(b), true
+}
+
+// liftClientLifecycleInSettings rewrites adopted settings from master traffic
+// so a lagging node blob cannot store pre-extension expiry/enable (#6228).
+func liftClientLifecycleInSettings(settings string, trafficByEmail map[string]*xray.ClientTraffic) (string, bool) {
+	if settings == "" || len(trafficByEmail) == 0 {
+		return settings, false
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(settings), &parsed); err != nil {
+		return settings, false
+	}
+	clients, _ := parsed["clients"].([]any)
+	if len(clients) == 0 {
+		return settings, false
+	}
+	changed := false
+	for i := range clients {
+		cm, ok := clients[i].(map[string]any)
+		if !ok {
+			continue
+		}
+		email, _ := cm["email"].(string)
+		if email == "" {
+			continue
+		}
+		tr := trafficByEmail[email]
+		if tr == nil {
+			continue
+		}
+		nodeExpiry, hasExpiry := jsonClientInt64(cm["expiryTime"])
+		if !hasExpiry {
+			continue
+		}
+		merged := mergeActivationExpiry(tr.ExpiryTime, nodeExpiry)
+		if merged != nodeExpiry {
+			cm["expiryTime"] = merged
+			changed = true
+		}
+		// tr is the already-merged master row, authoritative in both directions:
+		// a lagging blob must not re-enable a disabled client either (#4917).
+		if nodeEnable, _ := cm["enable"].(bool); nodeEnable != tr.Enable {
+			cm["enable"] = tr.Enable
+			changed = true
+		}
+		clients[i] = cm
+	}
+	if !changed {
+		return settings, false
+	}
+	parsed["clients"] = clients
+	b, err := json.MarshalIndent(parsed, "", "  ")
+	if err != nil {
+		return settings, false
+	}
+	return string(b), true
+}
+
+// settingsClientAbsoluteExpiries indexes the absolute (>0) expiryTime of every
+// client in a settings blob. Never nil, so callers can cache it per inbound.
+func settingsClientAbsoluteExpiries(settings string) map[string]int64 {
+	out := map[string]int64{}
+	if settings == "" {
+		return out
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(settings), &parsed); err != nil {
+		return out
+	}
+	clients, _ := parsed["clients"].([]any)
+	for _, c := range clients {
+		cm, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		email, _ := cm["email"].(string)
+		if email == "" {
+			continue
+		}
+		if exp, has := jsonClientInt64(cm["expiryTime"]); has && exp > 0 {
+			out[email] = exp
+		}
+	}
+	return out
+}
+
+func jsonClientInt64(v any) (int64, bool) {
+	// json.Unmarshal into map[string]any yields float64 for numbers.
+	n, ok := v.(float64)
+	if !ok {
+		return 0, false
+	}
+	return int64(n), true
 }

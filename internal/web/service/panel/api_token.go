@@ -29,6 +29,13 @@ type ApiTokenView struct {
 	ExpiresAt int64  `json:"expiresAt" example:"0"`
 }
 
+func apiTokenCreatedAtSeconds(createdAt int64) int64 {
+	if createdAt >= model.ApiTokenUnixMillisecondsThreshold {
+		return createdAt / 1000
+	}
+	return createdAt
+}
+
 // toView builds the metadata view returned by List. It never carries the
 // token value: only a SHA-256 hash is stored, and the plaintext is shown
 // exactly once at creation time.
@@ -37,7 +44,24 @@ func toView(t *model.ApiToken) *ApiTokenView {
 		Id:        t.Id,
 		Name:      t.Name,
 		Enabled:   t.Enabled,
-		CreatedAt: t.CreatedAt,
+		CreatedAt: apiTokenCreatedAtSeconds(t.CreatedAt),
+		Scope:     t.Scope,
+		ExpiresAt: t.ExpiresAt,
+	}
+}
+
+// NormalizeScope validates a requested scope, defaulting empty to admin so
+// callers that omit it keep the legacy full-access behavior.
+func NormalizeScope(scope string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "", model.ApiScopeAdmin:
+		return model.ApiScopeAdmin, nil
+	case model.ApiScopeMonitor:
+		return model.ApiScopeMonitor, nil
+	case model.ApiScopeNodeSync:
+		return model.ApiScopeNodeSync, nil
+	default:
+		return "", common.NewError("scope must be 'admin', 'monitor', or 'node-sync'")
 	}
 }
 

@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`InboundSchema (full) fixtures > parses hysteria-v1-tls byte-stably 1`] = `
+exports[`InboundSchema (full) fixtures > parses hysteria-tls byte-stably 1`] = `
 {
   "down": 0,
   "enable": true,
@@ -9,7 +9,7 @@ exports[`InboundSchema (full) fixtures > parses hysteria-v1-tls byte-stably 1`] 
   "listen": "",
   "port": 36715,
   "protocol": "hysteria",
-  "remark": "gina-hysteria-v1",
+  "remark": "gina-hysteria",
   "settings": {
     "clients": [
       {
@@ -25,7 +25,7 @@ exports[`InboundSchema (full) fixtures > parses hysteria-v1-tls byte-stably 1`] 
         "totalGB": 0,
       },
     ],
-    "version": 1,
+    "version": 2,
   },
   "shareAddr": "",
   "shareAddrStrategy": "node",
@@ -78,9 +78,8 @@ exports[`InboundSchema (full) fixtures > parses hysteria-v1-tls byte-stably 1`] 
       },
     },
   },
-  "tag": "inbound-hysteria-v1",
+  "tag": "inbound-hysteria",
   "total": 0,
-  "trafficMultiplier": 1,
   "up": 0,
 }
 `;
@@ -143,7 +142,6 @@ exports[`InboundSchema (full) fixtures > parses shadowsocks-tcp-2022 byte-stably
   },
   "tag": "inbound-ss-2022",
   "total": 0,
-  "trafficMultiplier": 1,
   "up": 0,
 }
 `;
@@ -233,7 +231,6 @@ exports[`InboundSchema (full) fixtures > parses trojan-ws-tls byte-stably 1`] = 
   },
   "tag": "inbound-trojan-ws",
   "total": 0,
-  "trafficMultiplier": 1,
   "up": 0,
 }
 `;
@@ -320,7 +317,6 @@ exports[`InboundSchema (full) fixtures > parses vless-tcp-reality byte-stably 1`
   },
   "tag": "inbound-vless-reality",
   "total": 0,
-  "trafficMultiplier": 1,
   "up": 0,
 }
 `;
@@ -413,7 +409,6 @@ exports[`InboundSchema (full) fixtures > parses vless-ws-tls byte-stably 1`] = `
   },
   "tag": "inbound-vless-1",
   "total": 0,
-  "trafficMultiplier": 1,
   "up": 0,
 }
 `;
@@ -509,7 +504,6 @@ exports[`InboundSchema (full) fixtures > parses vless-ws-tls-pinned byte-stably 
   },
   "tag": "inbound-vless-pinned-1",
   "total": 0,
-  "trafficMultiplier": 1,
   "up": 0,
 }
 `;
@@ -599,7 +593,6 @@ exports[`InboundSchema (full) fixtures > parses vmess-tcp-tls byte-stably 1`] = 
   },
   "tag": "inbound-vmess-1",
   "total": 0,
-  "trafficMultiplier": 1,
   "up": 0,
 }
 `;
@@ -615,6 +608,7 @@ exports[`InboundSchema (full) fixtures > parses wireguard-server byte-stably 1`]
   "protocol": "wireguard",
   "remark": "wg-server",
   "settings": {
+    "clients": [],
     "mtu": 1420,
     "noKernelTun": false,
     "peers": [
@@ -647,7 +641,6 @@ exports[`InboundSchema (full) fixtures > parses wireguard-server byte-stably 1`]
   },
   "tag": "inbound-wg-1",
   "total": 0,
-  "trafficMultiplier": 1,
   "up": 0,
 }
 `;

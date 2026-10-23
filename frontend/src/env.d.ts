@@ -20,12 +20,10 @@ interface SubPageData {
   links?: string[];
   emails?: string[];
   datepicker?: 'gregorian' | 'jalalian';
+  announce?: string;
   downloadByte?: string | number;
   uploadByte?: string | number;
   usedByte?: string | number;
-  // Branding document authored in the panel. Present only when branding is
-  // switched on; shape is validated client-side by normalizeSubBranding.
-  branding?: unknown;
 }
 
 interface Window {
@@ -33,39 +31,9 @@ interface Window {
   X_UI_CUR_VER?: string;
   X_UI_DB_TYPE?: string;
   X_UI_ROLE?: string;
-  // Display name of the logged-in account's role. Same as X_UI_ROLE for the
-  // built-ins; the admin-chosen name for a custom role.
   X_UI_ROLE_NAME?: string;
-  // Permissions granted to the logged-in account. Drives which menu entries
-  // and actions the SPA offers — the server enforces every one of them again.
   X_UI_PERMS?: string[];
-  // Whether per-client activity tracking is on. Page-load state, like the
-  // role/perms above — the sidebar offers the Client Activity entry only when
-  // it is true. Flipping the setting takes effect on the next load.
-  X_UI_CLIENT_ACTIVITY?: boolean;
   __SUB_PAGE_DATA__?: SubPageData;
-}
-
-declare module 'qs' {
-  interface StringifyOptions {
-    arrayFormat?: 'indices' | 'brackets' | 'repeat' | 'comma';
-    encode?: boolean;
-    encoder?: (str: unknown, defaultEncoder: (s: unknown) => string, charset: string, type: 'key' | 'value') => string;
-    allowDots?: boolean;
-    skipNulls?: boolean;
-    addQueryPrefix?: boolean;
-  }
-  interface ParseOptions {
-    depth?: number;
-    arrayLimit?: number;
-    allowDots?: boolean;
-    parseArrays?: boolean;
-    ignoreQueryPrefix?: boolean;
-  }
-  export function stringify(obj: unknown, options?: StringifyOptions): string;
-  export function parse(str: string, options?: ParseOptions): Record<string, unknown>;
-  const qs: { stringify: typeof stringify; parse: typeof parse };
-  export default qs;
 }
 
 declare module 'persian-calendar-suite' {

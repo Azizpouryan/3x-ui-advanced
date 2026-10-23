@@ -60,4 +60,11 @@ export const SERVICES_OPTIONS = [
 ];
 
 export const directSettings = { tag: 'direct', protocol: 'freedom' };
-export const ipv4Settings = { tag: 'IPv4', protocol: 'freedom', settings: { domainStrategy: 'UseIPv4' } };
+export const blockedSettings = { tag: 'blocked', protocol: 'blackhole', settings: {} };
+// The strategy rides on sockopt: freedom resolves through the socket layer, and
+// the settings-level alias makes the core warn on every config load.
+export const ipv4Settings = {
+  tag: 'IPv4',
+  protocol: 'freedom',
+  streamSettings: { sockopt: { domainStrategy: 'UseIPv4' } },
+};

@@ -1,6 +1,7 @@
 package outbound
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -28,6 +29,16 @@ func (s *OutboundService) AddTraffic(traffics []*xray.Traffic, clientTraffics []
 	return err, false
 }
 
+// saturatingAdd caps counters at database.TrafficMax: unlike the SQL paths,
+// this read-modify-write add happens in Go, where an int64 overflow silently
+// wraps negative instead of erroring (#5762).
+func saturatingAdd(a, b int64) int64 {
+	if b > database.TrafficMax-a {
+		return database.TrafficMax
+	}
+	return a + b
+}
+
 func (s *OutboundService) addOutboundTraffic(tx *gorm.DB, traffics []*xray.Traffic) error {
 	if len(traffics) == 0 {
 		return nil
@@ -47,9 +58,9 @@ func (s *OutboundService) addOutboundTraffic(tx *gorm.DB, traffics []*xray.Traff
 			}
 
 			outbound.Tag = traffic.Tag
-			outbound.Up = outbound.Up + traffic.Up
-			outbound.Down = outbound.Down + traffic.Down
-			outbound.Total = outbound.Up + outbound.Down
+			outbound.Up = saturatingAdd(outbound.Up, traffic.Up)
+			outbound.Down = saturatingAdd(outbound.Down, traffic.Down)
+			outbound.Total = saturatingAdd(outbound.Up, outbound.Down)
 
 			err = tx.Save(&outbound).Error
 			if err != nil {
@@ -97,8 +108,9 @@ func (s *OutboundService) ResetOutboundTraffic(tag string) error {
 
 // TestOutboundResult represents the result of testing an outbound.
 // Delay is in milliseconds. Endpoints is only populated for TCP-mode
-// probes; HTTP mode reports the time of a real HTTP request routed
-// through the outbound, with an optional timing breakdown.
+// probes; HTTP mode reports the round-trip of a real HTTP request on an
+// established connection through the outbound (the cold first request
+// supplies the timing breakdown).
 type TestOutboundResult struct {
 	Tag     string `json:"tag,omitempty"`
 	Success bool   `json:"success"`
@@ -117,6 +129,7 @@ type TestOutboundResult struct {
 	TTFBMs     int64 `json:"ttfbMs,omitempty"`
 
 	Endpoints []TestEndpointResult `json:"endpoints,omitempty"`
+	Egress    *TestEgressResult    `json:"egress,omitempty"`
 }
 
 // TestEndpointResult is one entry in a TCP-mode probe — the per-endpoint
@@ -126,6 +139,15 @@ type TestEndpointResult struct {
 	Success bool   `json:"success"`
 	Delay   int64  `json:"delay"`
 	Error   string `json:"error,omitempty"`
+}
+
+// TestEgressResult is populated by HTTP-mode probes from Cloudflare's trace
+// endpoint. It reports what an external service sees after the outbound chain.
+type TestEgressResult struct {
+	IPv4    string `json:"ipv4,omitempty"`
+	IPv6    string `json:"ipv6,omitempty"`
+	Country string `json:"country,omitempty"`
+	Warp    string `json:"warp,omitempty"`
 }
 
 func (s *OutboundService) testOutboundTCP(outboundJSON string) (*TestOutboundResult, error) {
@@ -183,7 +205,7 @@ func (s *OutboundService) testOutboundTCP(outboundJSON string) (*TestOutboundRes
 func probeTCPEndpoint(endpoint string, timeout time.Duration) TestEndpointResult {
 	r := TestEndpointResult{Address: endpoint}
 	start := time.Now()
-	conn, err := net.DialTimeout("tcp", endpoint, timeout)
+	conn, err := (&net.Dialer{Timeout: timeout}).DialContext(context.Background(), "tcp", endpoint)
 	r.Delay = time.Since(start).Milliseconds()
 	if err != nil {
 		r.Error = err.Error()

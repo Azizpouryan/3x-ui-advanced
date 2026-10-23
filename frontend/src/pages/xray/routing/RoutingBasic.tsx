@@ -1,6 +1,6 @@
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Alert, Switch } from 'antd';
+import { Alert, Select, Switch } from 'antd';
 
 import { SettingListItem } from '@/components/ui';
 import type { XraySettingsValue, SetTemplate } from '@/hooks/useXraySetting';
@@ -13,8 +13,13 @@ import {
   directSettings,
   ipv4Settings,
 } from '../basics/constants';
-import { ruleGetter, ruleSetter, syncOutbound } from '../basics/helpers';
-import TagsInput from '@/components/form/TagsInput';
+import {
+  getDefaultOutboundTag,
+  ruleGetter,
+  ruleSetter,
+  setDefaultOutboundTag,
+  syncOutbound,
+} from '../basics/helpers';
 
 interface RoutingBasicProps {
   templateSettings: XraySettingsValue | null;
@@ -44,6 +49,14 @@ export default function RoutingBasic({ templateSettings, setTemplateSettings }: 
   const ipv4Domains = ruleGetter(templateSettings, 'IPv4', 'domain');
 
   const torrentActive = BITTORRENT_PROTOCOLS.every((p) => blockedProtocols.includes(p));
+  const defaultOutboundTag = getDefaultOutboundTag(templateSettings);
+  const defaultOutboundOptions = useMemo(() => {
+    const tags = new Set<string>(['direct', 'blocked']);
+    for (const o of templateSettings?.outbounds ?? []) {
+      if (o?.tag) tags.add(o.tag);
+    }
+    return [...tags].map((value) => ({ label: value, value }));
+  }, [templateSettings?.outbounds]);
 
   return (
     <>
@@ -52,6 +65,20 @@ export default function RoutingBasic({ templateSettings, setTemplateSettings }: 
         showIcon
         className="mb-12 hint-alert"
         title={t('pages.xray.blockConnectionsConfigsDesc')}
+      />
+
+      <SettingListItem
+        title={t('pages.xray.defaultOutbound')}
+        description={t('pages.xray.defaultOutboundDesc')}
+        paddings="small"
+        control={
+          <Select
+            value={defaultOutboundTag}
+            style={{ width: '100%' }}
+            options={defaultOutboundOptions}
+            onChange={(tag) => mutate((tt) => setDefaultOutboundTag(tt, tag))}
+          />
+        }
       />
 
       <SettingListItem
@@ -76,7 +103,8 @@ export default function RoutingBasic({ templateSettings, setTemplateSettings }: 
         title={t('pages.xray.blockips')}
         paddings="small"
         control={
-          <TagsInput
+          <Select
+            mode="tags"
             value={blockedIPs}
             style={{ width: '100%' }}
             options={IPS_OPTIONS}
@@ -89,7 +117,8 @@ export default function RoutingBasic({ templateSettings, setTemplateSettings }: 
         title={t('pages.xray.blockdomains')}
         paddings="small"
         control={
-          <TagsInput
+          <Select
+            mode="tags"
             value={blockedDomains}
             style={{ width: '100%' }}
             options={BLOCK_DOMAINS_OPTIONS}
@@ -109,7 +138,8 @@ export default function RoutingBasic({ templateSettings, setTemplateSettings }: 
         title={t('pages.xray.directips')}
         paddings="small"
         control={
-          <TagsInput
+          <Select
+            mode="tags"
             value={directIPs}
             style={{ width: '100%' }}
             options={IPS_OPTIONS}
@@ -127,7 +157,8 @@ export default function RoutingBasic({ templateSettings, setTemplateSettings }: 
         title={t('pages.xray.directdomains')}
         paddings="small"
         control={
-          <TagsInput
+          <Select
+            mode="tags"
             value={directDomains}
             style={{ width: '100%' }}
             options={DOMAINS_OPTIONS}
@@ -146,7 +177,8 @@ export default function RoutingBasic({ templateSettings, setTemplateSettings }: 
         description={t('pages.xray.ipv4RoutingDesc')}
         paddings="small"
         control={
-          <TagsInput
+          <Select
+            mode="tags"
             value={ipv4Domains}
             style={{ width: '100%' }}
             options={SERVICES_OPTIONS}

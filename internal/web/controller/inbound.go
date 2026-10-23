@@ -70,34 +70,37 @@ func (a *InboundController) inboundServiceFor(c *gin.Context) *service.InboundSe
 
 // initRouter initializes the routes for inbound-related operations.
 func (a *InboundController) initRouter(g *gin.RouterGroup) {
-
 	g.GET("/list", a.getInbounds)
 	g.GET("/list/slim", a.getInboundsSlim)
 	g.GET("/options", a.getInboundOptions)
+	g.GET("/allLinks", a.getAllInboundLinks)
 	g.GET("/get/:id", scopeInboundParam, a.getInbound)
 	g.GET("/:id/fallbacks", scopeInboundParam, a.getFallbacks)
 
-	g.POST("/add", rejectReseller, a.addInbound)
-	g.POST("/del/:id", rejectReseller, scopeInboundParam, a.delInbound)
-	g.POST("/bulkDel", rejectReseller, a.bulkDelInbounds)
-	g.POST("/update/:id", rejectReseller, scopeInboundParam, a.updateInbound)
-	g.POST("/setEnable/:id", rejectReseller, scopeInboundParam, a.setInboundEnable)
-	g.POST("/:id/resetTraffic", rejectReseller, scopeInboundParam, a.resetInboundTraffic)
-	g.POST("/:id/delAllClients", rejectReseller, scopeInboundParam, a.delAllInboundClients)
-	g.POST("/:id/delDepletedClients", rejectReseller, scopeInboundParam, a.delDepletedInboundClients)
-	g.POST("/resetAllTraffics", rejectReseller, a.resetAllTraffics)
-	g.POST("/import", rejectReseller, a.importInbound)
-	g.POST("/:id/fallbacks", rejectReseller, scopeInboundParam, a.setFallbacks)
+	g.POST("/add", a.addInbound)
+	g.POST("/del/:id", a.delInbound)
+	g.POST("/bulkDel", a.bulkDelInbounds)
+	g.POST("/update/:id", a.updateInbound)
+	g.POST("/setEnable/:id", a.setInboundEnable)
+	g.POST("/:id/subSortIndex", a.setInboundSubSortIndex)
+	g.POST("/:id/resetTraffic", a.resetInboundTraffic)
+	g.POST("/:id/delAllClients", a.delAllInboundClients)
+	g.POST("/resetAllTraffics", a.resetAllTraffics)
+	g.POST("/import", a.importInbound)
+	g.POST("/:id/fallbacks", scopeInboundParam, a.setFallbacks)
 	g.POST("/pushClientTraffics", a.pushClientTraffics)
 }
 
-// getInbounds retrieves the inbounds visible to the logged-in admin. Inbounds
-// are panel-global (their owner user_id is vestigial), so we fetch all of them
-// (userId 0 = no ownership filter) and let filterInboundsForRole() scope the
-// result to a reseller's AllowedInbounds. Without this, a freshly-created
-// reseller/manager (whose own user_id owns no inbounds) would see an empty list.
+// getInbounds retrieves the list of inbounds for the logged-in user.
 func (a *InboundController) getInbounds(c *gin.Context) {
-	inbounds, err := a.inboundService.GetInbounds(0)
+	user := session.GetLoginUser(c)
+	var inbounds []*model.Inbound
+	var err error
+	if session.IsScoped(c) {
+		inbounds, err = a.inboundService.GetInboundsSlim(user.Id)
+	} else {
+		inbounds, err = a.inboundService.GetInbounds(user.Id)
+	}
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.obtain"), err)
 		return
@@ -108,7 +111,8 @@ func (a *InboundController) getInbounds(c *gin.Context) {
 // getInboundsSlim is the list-page variant that strips full client
 // payloads from settings.clients[]. Detail-view flows still use /get/:id.
 func (a *InboundController) getInboundsSlim(c *gin.Context) {
-	inbounds, err := a.inboundService.GetInboundsSlim(0)
+	user := session.GetLoginUser(c)
+	inbounds, err := a.inboundService.GetInboundsSlim(user.Id)
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.obtain"), err)
 		return
@@ -116,11 +120,25 @@ func (a *InboundController) getInboundsSlim(c *gin.Context) {
 	jsonObj(c, filterInboundsForRole(c, inbounds), nil)
 }
 
+// getAllInboundLinks returns every inbound's share links across all clients,
+// rendered through the same subscription engine the client pages use so the
+// remark template (name-only display part) is applied consistently.
+func (a *InboundController) getAllInboundLinks(c *gin.Context) {
+	user := session.GetLoginUser(c)
+	links, err := a.inboundService.GetAllInboundLinks(resolveHost(c), user.Id)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.obtain"), err)
+		return
+	}
+	jsonObj(c, links, nil)
+}
+
 // getInboundOptions returns a lightweight projection of the user's inbounds
 // (id, remark, protocol, port, tlsFlowCapable) for pickers in the clients UI.
 // Avoids shipping per-client settings and traffic stats just to fill a dropdown.
 func (a *InboundController) getInboundOptions(c *gin.Context) {
-	options, err := a.inboundService.GetInboundOptions(0)
+	user := session.GetLoginUser(c)
+	options, err := a.inboundService.GetInboundOptions(user.Id)
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.obtain"), err)
 		return
@@ -337,39 +355,6 @@ func (a *InboundController) delAllInboundClients(c *gin.Context) {
 		return
 	}
 	emails, err := a.inboundService.EmailsByInbound(id)
-	if err != nil {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
-		return
-	}
-	if len(emails) == 0 {
-		jsonObj(c, service.BulkDeleteResult{}, nil)
-		return
-	}
-	result, needRestart, err := a.clientService.BulkDelete(&a.inboundService, emails, false)
-	if err != nil {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
-		return
-	}
-	jsonObj(c, result, nil)
-	if needRestart {
-		a.xrayService.SetToNeedRestart()
-	}
-	user := session.GetLoginUser(c)
-	a.broadcastInboundsUpdate(user.Id)
-	notifyClientsChanged()
-}
-
-// delDepletedInboundClients removes only the ended clients of a specific
-// inbound — those whose expiry date has passed or whose traffic quota is
-// exhausted — and keeps everyone else (and the inbound) untouched. Same
-// bulk-delete path as delAllInboundClients, just a filtered email list.
-func (a *InboundController) delDepletedInboundClients(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
-		return
-	}
-	emails, err := a.inboundService.DepletedEmailsByInbound(id)
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return

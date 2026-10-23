@@ -3,7 +3,6 @@ import { Form, Select, Switch } from 'antd';
 import type { FormInstance } from 'antd/es/form';
 
 import { SNIFFING_OPTION } from '@/schemas/primitives';
-import TagsInput from '@/components/form/TagsInput';
 
 const DEST_OPTIONS = Object.entries(SNIFFING_OPTION).map(([label, value]) => ({ value, label }));
 
@@ -35,7 +34,12 @@ export default function SniffingFields({ name, form, enableLabel }: SniffingFiel
       {enabled && (
         <>
           <Form.Item name={[...name, 'destOverride']} wrapperCol={{ md: { span: 14, offset: 8 } }}>
-            <Select mode="multiple" className="sniffing-options" options={DEST_OPTIONS} />
+            <Select
+              mode="multiple"
+              className="sniffing-options"
+              aria-label={t('pages.inbounds.sniffingDestOverride')}
+              options={DEST_OPTIONS}
+            />
           </Form.Item>
           <Form.Item
             label={t('pages.inbounds.sniffingMetadataOnly')}
@@ -51,11 +55,27 @@ export default function SniffingFields({ name, form, enableLabel }: SniffingFiel
           >
             <Switch />
           </Form.Item>
-          <Form.Item label={t('pages.inbounds.sniffingIpsExcluded')} name={[...name, 'ipsExcluded']}>
-            <TagsInput placeholder="IP/CIDR/geoip:*/ext:*" style={{ width: '100%' }} />
+          <Form.Item
+            label={t('pages.inbounds.sniffingIpsExcluded')}
+            name={[...name, 'ipsExcluded']}
+          >
+            <Select
+              mode="tags"
+              tokenSeparators={[',']}
+              placeholder="IP/CIDR/geoip:*/ext:*"
+              style={{ width: '100%' }}
+            />
           </Form.Item>
-          <Form.Item label={t('pages.inbounds.sniffingDomainsExcluded')} name={[...name, 'domainsExcluded']}>
-            <TagsInput placeholder="domain:*/ext:*" style={{ width: '100%' }} />
+          <Form.Item
+            label={t('pages.inbounds.sniffingDomainsExcluded')}
+            name={[...name, 'domainsExcluded']}
+          >
+            <Select
+              mode="tags"
+              tokenSeparators={[',']}
+              placeholder="domain:*/ext:*"
+              style={{ width: '100%' }}
+            />
           </Form.Item>
         </>
       )}

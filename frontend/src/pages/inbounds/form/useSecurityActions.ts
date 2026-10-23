@@ -1,32 +1,48 @@
-import { useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { FormInstance } from 'antd';
+import type { UseFormReturn } from 'react-hook-form';
 import type { MessageInstance } from 'antd/es/message/interface';
+import type { HookAPI as ModalHookAPI } from 'antd/es/modal/useModal';
 
 import { HttpUtil, RandomUtil } from '@/utils';
-import { getRandomRealityTarget } from '@/models/reality-targets';
 import { createTlsSettingsWithDefaultCert } from '@/lib/xray/inbound-tls-defaults';
 import { RealityStreamSettingsSchema } from '@/schemas/protocols/security/reality';
 import type { InboundFormValues } from '@/schemas/forms/inbound-form';
 import type { RealityScanResult } from '@/generated/types';
 
 interface UseSecurityActionsArgs {
-  form: FormInstance<InboundFormValues>;
+  methods: UseFormReturn<InboundFormValues>;
   setSaving: Dispatch<SetStateAction<boolean>>;
   messageApi: MessageInstance;
-  // Node the inbound is deployed to (null = central panel). "Set Cert from
-  // Panel" must read the node's own cert paths for a node-assigned inbound —
-  // the central panel's paths don't exist on the node. See issue #4854.
+  modal: ModalHookAPI;
+  /*
+   * Node the inbound is deployed to (null = central panel). "Set Cert from
+   * Panel" must read the node's own cert paths for a node-assigned inbound —
+   * the central panel's paths don't exist on the node. See issue #4854.
+   */
   nodeId: number | null;
+  setScanResult: Dispatch<SetStateAction<RealityScanResult | null>>;
+  setScanning: Dispatch<SetStateAction<boolean>>;
 }
 
-// Server-side TLS / Reality key + certificate generation handlers for the
-// inbound modal's security tab. Each talks to a /panel server endpoint and
-// writes the result back into the form. Lifted out of InboundFormModal so
-// the modal body stays focused on orchestration.
-export function useSecurityActions({ form, setSaving, messageApi, nodeId }: UseSecurityActionsArgs) {
+/*
+ * Server-side TLS / Reality key + certificate generation handlers for the
+ * inbound modal's security tab. Each talks to a /panel server endpoint and
+ * writes the result back into the form. Lifted out of InboundFormModal so
+ * the modal body stays focused on orchestration.
+ */
+export function useSecurityActions({
+  methods,
+  setSaving,
+  messageApi,
+  modal,
+  nodeId,
+  setScanResult,
+  setScanning,
+}: UseSecurityActionsArgs) {
   const { t } = useTranslation();
+  const setValue = methods.setValue as unknown as (name: string, value: unknown) => void;
+  const getValues = methods.getValues as unknown as (name?: string) => unknown;
 
   const genRealityKeypair = async () => {
     setSaving(true);
@@ -34,8 +50,8 @@ export function useSecurityActions({ form, setSaving, messageApi, nodeId }: UseS
       const msg = await HttpUtil.get('/panel/api/server/getNewX25519Cert');
       if (msg?.success) {
         const obj = msg.obj as { privateKey: string; publicKey: string };
-        form.setFieldValue(['streamSettings', 'realitySettings', 'privateKey'], obj.privateKey);
-        form.setFieldValue(['streamSettings', 'realitySettings', 'settings', 'publicKey'], obj.publicKey);
+        setValue('streamSettings.realitySettings.privateKey', obj.privateKey);
+        setValue('streamSettings.realitySettings.settings.publicKey', obj.publicKey);
       }
     } finally {
       setSaving(false);
@@ -43,8 +59,8 @@ export function useSecurityActions({ form, setSaving, messageApi, nodeId }: UseS
   };
 
   const clearRealityKeypair = () => {
-    form.setFieldValue(['streamSettings', 'realitySettings', 'privateKey'], '');
-    form.setFieldValue(['streamSettings', 'realitySettings', 'settings', 'publicKey'], '');
+    setValue('streamSettings.realitySettings.privateKey', '');
+    setValue('streamSettings.realitySettings.settings.publicKey', '');
   };
 
   const genMldsa65 = async () => {
@@ -53,8 +69,8 @@ export function useSecurityActions({ form, setSaving, messageApi, nodeId }: UseS
       const msg = await HttpUtil.get('/panel/api/server/getNewmldsa65');
       if (msg?.success) {
         const obj = msg.obj as { seed: string; verify: string };
-        form.setFieldValue(['streamSettings', 'realitySettings', 'mldsa65Seed'], obj.seed);
-        form.setFieldValue(['streamSettings', 'realitySettings', 'settings', 'mldsa65Verify'], obj.verify);
+        setValue('streamSettings.realitySettings.mldsa65Seed', obj.seed);
+        setValue('streamSettings.realitySettings.settings.mldsa65Verify', obj.verify);
       }
     } finally {
       setSaving(false);
@@ -62,49 +78,51 @@ export function useSecurityActions({ form, setSaving, messageApi, nodeId }: UseS
   };
 
   const clearMldsa65 = () => {
-    form.setFieldValue(['streamSettings', 'realitySettings', 'mldsa65Seed'], '');
-    form.setFieldValue(['streamSettings', 'realitySettings', 'settings', 'mldsa65Verify'], '');
+    setValue('streamSettings.realitySettings.mldsa65Seed', '');
+    setValue('streamSettings.realitySettings.settings.mldsa65Verify', '');
   };
 
-  const randomizeRealityTarget = () => {
-    const tgt = getRandomRealityTarget() as { target: string; sni: string };
-    form.setFieldValue(['streamSettings', 'realitySettings', 'target'], tgt.target);
-    form.setFieldValue(
-      ['streamSettings', 'realitySettings', 'serverNames'],
-      tgt.sni.split(',').map((s) => s.trim()).filter(Boolean),
-    );
-  };
-
-  // --- REALITY target discovery -------------------------------------------
-  // A usable target has to answer TLS 1.3 with X25519 and h2 behind a valid
-  // certificate; that is not something an operator can tell by looking at a
-  // hostname. The panel probes candidates itself and offers the ones that pass,
-  // so the field can be picked from a list instead of typed from memory — and
-  // the SNI values come from the certificate's own SAN list rather than a guess.
-  const [scanning, setScanning] = useState(false);
-  const [scanResult, setScanResult] = useState<RealityScanResult | null>(null);
-
-  const applyRealityScanResult = (r: RealityScanResult) => {
+  /*
+   * replaceServerNames is for picking a target wholesale: keeping the previous
+   * target's SNI would leave a REALITY config that cannot work.
+   */
+  const applyRealityScanResult = (r: RealityScanResult, replaceServerNames = false) => {
     setScanResult(r);
-    form.setFieldValue(['streamSettings', 'realitySettings', 'target'], r.target);
-    if (r.serverNames?.length) {
-      form.setFieldValue(['streamSettings', 'realitySettings', 'serverNames'], r.serverNames);
+    setValue('streamSettings.realitySettings.target', r.target);
+    /*
+     * Names off an untrusted chain are not usable as SNI; names off a trusted
+     * one are, even when the SNI sent did not match them, which is how a stale
+     * SNI recovers instead of failing every rescan.
+     */
+    if (replaceServerNames) {
+      setValue('streamSettings.realitySettings.serverNames', r.serverNames ?? []);
+    } else if ((r.certValid || r.certChainValid) && r.serverNames?.length) {
+      setValue('streamSettings.realitySettings.serverNames', r.serverNames);
     }
   };
 
-  const scanRealityTarget = async () => {
-    const raw = form.getFieldValue(['streamSettings', 'realitySettings', 'target']);
-    const target = (typeof raw === 'string' ? raw : '').trim();
+  const scanRealityTarget = async (allowPrivate = false) => {
+    const target = (
+      (getValues('streamSettings.realitySettings.target') as string | undefined) ?? ''
+    ).trim();
     if (!target) {
       messageApi.warning(t('pages.inbounds.form.realityTargetRequired'));
       return;
     }
-    const xver = Number(form.getFieldValue(['streamSettings', 'realitySettings', 'xver'])) || 0;
+    const xver = Number(getValues('streamSettings.realitySettings.xver')) || 0;
+    /*
+     * Clients dial the target but send an SNI from serverNames, so the probe
+     * must too — a fronting proxy answers a bare target name with its default
+     * certificate, which then reads as an untrusted target.
+     */
+    const serverNames =
+      (getValues('streamSettings.realitySettings.serverNames') as string[] | undefined) ?? [];
+    const sni = (serverNames.find((n) => typeof n === 'string' && n.trim() !== '') ?? '').trim();
     setScanning(true);
     try {
       const msg = await HttpUtil.post<RealityScanResult>(
         '/panel/api/server/scanRealityTarget',
-        { target, xver },
+        { target, sni, xver, allowPrivate },
         { silent: true },
       );
       if (!msg?.success || !msg.obj) {
@@ -114,10 +132,28 @@ export function useSecurityActions({ form, setSaving, messageApi, nodeId }: UseS
       }
       const r = msg.obj;
       applyRealityScanResult(r);
-      if (r.feasible) {
-        messageApi.success(t('pages.inbounds.toasts.scanRealityTargetFeasible'));
-      } else {
+      /*
+       * The SSRF guard refuses a LAN/Docker target until the operator confirms
+       * it; the retry carries the opt-in for this one probe.
+       */
+      if (r.privateTarget && !allowPrivate) {
+        modal.confirm({
+          title: t('pages.inbounds.form.scanPrivateConfirmTitle'),
+          content: t('pages.inbounds.form.scanPrivateConfirmContent', {
+            target: r.target || target,
+          }),
+          okText: t('confirm'),
+          cancelText: t('cancel'),
+          onOk: () => scanRealityTarget(true),
+        });
+        return;
+      }
+      if (!r.feasible) {
         messageApi.warning(r.reason || t('pages.inbounds.toasts.scanRealityTargetNotFeasible'));
+      } else if (r.privateTarget) {
+        messageApi.warning(t('pages.inbounds.toasts.scanRealityTargetPrivate'));
+      } else {
+        messageApi.success(t('pages.inbounds.toasts.scanRealityTargetFeasible'));
       }
     } finally {
       setScanning(false);
@@ -138,21 +174,28 @@ export function useSecurityActions({ form, setSaving, messageApi, nodeId }: UseS
   };
 
   const randomizeShortIds = () => {
-    form.setFieldValue(
-      ['streamSettings', 'realitySettings', 'shortIds'],
-      RandomUtil.randomShortIds().split(',').map((s) => s.trim()).filter(Boolean),
+    setValue(
+      'streamSettings.realitySettings.shortIds',
+      RandomUtil.randomShortIds()
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
     );
   };
 
+  const randomizeSpiderX = () => {
+    setValue('streamSettings.realitySettings.settings.spiderX', `/${RandomUtil.randomSeq(15)}`);
+  };
+
   const getNewEchCert = async () => {
-    const sni = form.getFieldValue(['streamSettings', 'tlsSettings', 'serverName']);
+    const sni = getValues('streamSettings.tlsSettings.serverName');
     setSaving(true);
     try {
       const msg = await HttpUtil.post('/panel/api/server/getNewEchCert', { sni });
       if (msg?.success) {
         const obj = msg.obj as { echServerKeys: string; echConfigList: string };
-        form.setFieldValue(['streamSettings', 'tlsSettings', 'echServerKeys'], obj.echServerKeys);
-        form.setFieldValue(['streamSettings', 'tlsSettings', 'settings', 'echConfigList'], obj.echConfigList);
+        setValue('streamSettings.tlsSettings.echServerKeys', obj.echServerKeys);
+        setValue('streamSettings.tlsSettings.settings.echConfigList', obj.echConfigList);
       }
     } finally {
       setSaving(false);
@@ -160,21 +203,25 @@ export function useSecurityActions({ form, setSaving, messageApi, nodeId }: UseS
   };
 
   const clearEchCert = () => {
-    form.setFieldValue(['streamSettings', 'tlsSettings', 'echServerKeys'], '');
-    form.setFieldValue(['streamSettings', 'tlsSettings', 'settings', 'echConfigList'], '');
+    setValue('streamSettings.tlsSettings.echServerKeys', '');
+    setValue('streamSettings.tlsSettings.settings.echConfigList', '');
   };
 
-  // Fill the pinned-cert field from the inbound's own certificate: read the
-  // first configured cert (file path or inline content) and ask the server for
-  // its hex SHA-256, then merge the hash(es) into pinnedPeerCertSha256.
+  /*
+   * Fill the pinned-cert field from the inbound's own certificate: read the
+   * first configured cert (file path or inline content) and ask the server for
+   * its hex SHA-256, then merge the hash(es) into pinnedPeerCertSha256.
+   */
   const pinFromCert = async () => {
-    const certs = (form.getFieldValue(['streamSettings', 'tlsSettings', 'certificates']) ?? []) as Array<{
+    const certs = (getValues('streamSettings.tlsSettings.certificates') ?? []) as Array<{
       certificateFile?: string;
       certificate?: string[];
     }>;
     const first = certs[0];
     const certFile = first?.certificateFile?.trim() ?? '';
-    const certContent = Array.isArray(first?.certificate) ? first.certificate.join('\n').trim() : '';
+    const certContent = Array.isArray(first?.certificate)
+      ? first.certificate.join('\n').trim()
+      : '';
     if (!certFile && !certContent) {
       messageApi.warning(t('pages.inbounds.setDefaultCertEmpty'));
       return;
@@ -188,29 +235,36 @@ export function useSecurityActions({ form, setSaving, messageApi, nodeId }: UseS
       }
       const hashes = (msg.obj as string[] | undefined) ?? [];
       if (hashes.length === 0) return;
-      const current = (form.getFieldValue(
-        ['streamSettings', 'tlsSettings', 'settings', 'pinnedPeerCertSha256'],
-      ) as string[] | undefined) ?? [];
+      const current =
+        (getValues('streamSettings.tlsSettings.settings.pinnedPeerCertSha256') as
+          | string[]
+          | undefined) ?? [];
       const merged = Array.from(new Set([...current, ...hashes]));
-      form.setFieldValue(['streamSettings', 'tlsSettings', 'settings', 'pinnedPeerCertSha256'], merged);
+      setValue('streamSettings.tlsSettings.settings.pinnedPeerCertSha256', merged);
     } finally {
       setSaving(false);
     }
   };
 
-  // Fill the pinned-cert field by pinging the configured SNI: fetches the live
-  // remote certificate hash via `xray tls ping`. Useful when the panel doesn't
-  // hold the cert file (a CDN front / external endpoint).
+  /*
+   * Fill the pinned-cert field by pinging the configured SNI: fetches the live
+   * remote certificate hash via `xray tls ping`. Useful when the panel doesn't
+   * hold the cert file (a CDN front / external endpoint).
+   */
   const pinFromRemote = async () => {
-    const server = ((form.getFieldValue(['streamSettings', 'tlsSettings', 'serverName']) as string | undefined) ?? '').trim();
+    const server = (
+      (getValues('streamSettings.tlsSettings.serverName') as string | undefined) ?? ''
+    ).trim();
     if (!server) {
       messageApi.warning(t('pages.inbounds.form.pinFromRemoteNoSni'));
       return;
     }
-    // `xray tls ping` defaults to :443, but a self-hosted inbound rarely
-    // listens there. Append the inbound's own port (unless the SNI already
-    // carries one) so the ping reaches the actual TLS endpoint.
-    const port = form.getFieldValue('port') as number | undefined;
+    /*
+     * `xray tls ping` defaults to :443, but a self-hosted inbound rarely
+     * listens there. Append the inbound's own port (unless the SNI already
+     * carries one) so the ping reaches the actual TLS endpoint.
+     */
+    const port = getValues('port') as number | undefined;
     const target = /:\d+$/.test(server) || !port ? server : `${server}:${port}`;
     setSaving(true);
     try {
@@ -221,11 +275,12 @@ export function useSecurityActions({ form, setSaving, messageApi, nodeId }: UseS
       }
       const hashes = (msg.obj as string[] | undefined) ?? [];
       if (hashes.length === 0) return;
-      const current = (form.getFieldValue(
-        ['streamSettings', 'tlsSettings', 'settings', 'pinnedPeerCertSha256'],
-      ) as string[] | undefined) ?? [];
+      const current =
+        (getValues('streamSettings.tlsSettings.settings.pinnedPeerCertSha256') as
+          | string[]
+          | undefined) ?? [];
       const merged = Array.from(new Set([...current, ...hashes]));
-      form.setFieldValue(['streamSettings', 'tlsSettings', 'settings', 'pinnedPeerCertSha256'], merged);
+      setValue('streamSettings.tlsSettings.settings.pinnedPeerCertSha256', merged);
     } finally {
       setSaving(false);
     }
@@ -234,11 +289,14 @@ export function useSecurityActions({ form, setSaving, messageApi, nodeId }: UseS
   const setCertFromPanel = async (certName: number) => {
     setSaving(true);
     try {
-      // Node-assigned inbounds run on the node, so their cert files must be the
-      // node's own paths (fetched through the central panel), not this panel's.
-      const msg = typeof nodeId === 'number'
-        ? await HttpUtil.get(`/panel/api/nodes/webCert/${nodeId}`, undefined, { silent: true })
-        : await HttpUtil.post('/panel/api/setting/all', undefined, { silent: true });
+      /*
+       * Node-assigned inbounds run on the node, so their cert files must be the
+       * node's own paths (fetched through the central panel), not this panel's.
+       */
+      const msg =
+        typeof nodeId === 'number'
+          ? await HttpUtil.get(`/panel/api/nodes/webCert/${nodeId}`, undefined, { silent: true })
+          : await HttpUtil.post('/panel/api/setting/all', undefined, { silent: true });
       if (!msg?.success) {
         messageApi.warning(msg?.msg || t('pages.inbounds.setDefaultCertEmpty'));
         return;
@@ -248,32 +306,24 @@ export function useSecurityActions({ form, setSaving, messageApi, nodeId }: UseS
         messageApi.warning(t('pages.inbounds.setDefaultCertEmpty'));
         return;
       }
-      form.setFieldValue(
-        ['streamSettings', 'tlsSettings', 'certificates', certName, 'certificateFile'],
+      setValue(
+        `streamSettings.tlsSettings.certificates.${certName}.certificateFile`,
         obj.webCertFile ?? '',
       );
-      form.setFieldValue(
-        ['streamSettings', 'tlsSettings', 'certificates', certName, 'keyFile'],
-        obj.webKeyFile ?? '',
-      );
+      setValue(`streamSettings.tlsSettings.certificates.${certName}.keyFile`, obj.webKeyFile ?? '');
     } finally {
       setSaving(false);
     }
   };
 
   const clearCertFiles = (certName: number) => {
-    form.setFieldValue(
-      ['streamSettings', 'tlsSettings', 'certificates', certName, 'certificateFile'],
-      '',
-    );
-    form.setFieldValue(
-      ['streamSettings', 'tlsSettings', 'certificates', certName, 'keyFile'],
-      '',
-    );
+    setValue(`streamSettings.tlsSettings.certificates.${certName}.certificateFile`, '');
+    setValue(`streamSettings.tlsSettings.certificates.${certName}.keyFile`, '');
   };
 
   const onSecurityChange = async (next: string) => {
-    const current = (form.getFieldValue('streamSettings') as Record<string, unknown>) ?? {};
+    setScanResult(null);
+    const current = (getValues('streamSettings') as Record<string, unknown>) ?? {};
     const cleaned: Record<string, unknown> = { ...current, security: next };
     delete cleaned.tlsSettings;
     delete cleaned.realitySettings;
@@ -282,23 +332,26 @@ export function useSecurityActions({ form, setSaving, messageApi, nodeId }: UseS
     }
     if (next === 'reality') {
       const reality = RealityStreamSettingsSchema.parse({}) as Record<string, unknown>;
-      const tgt = getRandomRealityTarget() as { target: string; sni: string };
-      reality.target = tgt.target;
-      reality.serverNames = tgt.sni.split(',').map((s) => s.trim()).filter(Boolean);
-      reality.shortIds = RandomUtil.randomShortIds().split(',').map((s) => s.trim()).filter(Boolean);
+      reality.target = '';
+      reality.serverNames = [];
+      reality.shortIds = RandomUtil.randomShortIds()
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
       cleaned.realitySettings = reality;
     }
-    form.setFieldValue('streamSettings', cleaned);
+    setValue('streamSettings', cleaned);
     if (next === 'reality') {
+      randomizeSpiderX();
       try {
         const msg = await HttpUtil.get('/panel/api/server/getNewX25519Cert');
         if (msg?.success) {
           const obj = msg.obj as { privateKey: string; publicKey: string };
-          form.setFieldValue(['streamSettings', 'realitySettings', 'privateKey'], obj.privateKey);
-          form.setFieldValue(['streamSettings', 'realitySettings', 'settings', 'publicKey'], obj.publicKey);
+          setValue('streamSettings.realitySettings.privateKey', obj.privateKey);
+          setValue('streamSettings.realitySettings.settings.publicKey', obj.publicKey);
         }
       } catch {
-        // best-effort: leave keypair fields empty if server call fails
+        /* best-effort: leave keypair fields empty if server call fails */
       }
     }
   };
@@ -308,13 +361,11 @@ export function useSecurityActions({ form, setSaving, messageApi, nodeId }: UseS
     clearRealityKeypair,
     genMldsa65,
     clearMldsa65,
-    randomizeRealityTarget,
-    scanning,
-    scanResult,
     scanRealityTarget,
     scanRealityCandidates,
     applyRealityScanResult,
     randomizeShortIds,
+    randomizeSpiderX,
     getNewEchCert,
     clearEchCert,
     pinFromCert,

@@ -6,7 +6,6 @@ import { AimOutlined } from '@ant-design/icons';
 import { HttpUtil } from '@/utils';
 import { useInboundOptions } from '@/api/queries/useInboundOptions';
 import { buildRemarkByTag, formatInboundTag } from './helpers';
-import OptionButtons from '@/components/form/OptionButtons';
 
 interface RouteTesterProps {
   inboundTags: string[];
@@ -67,6 +66,7 @@ export default function RouteTester({ inboundTags, isMobile }: RouteTesterProps)
       <Row gutter={[8, 8]} align="bottom">
         <Col xs={fieldSpan} sm={7}>
           <Input
+            aria-label={t('pages.xray.routeTesterDest')}
             placeholder={t('pages.xray.routeTesterDest')}
             value={dest}
             onChange={(e) => setDest(e.target.value)}
@@ -76,6 +76,7 @@ export default function RouteTester({ inboundTags, isMobile }: RouteTesterProps)
         </Col>
         <Col xs={12} sm={3}>
           <InputNumber
+            aria-label={t('pages.xray.routeTesterPort')}
             style={{ width: '100%' }}
             min={0}
             max={65535}
@@ -85,7 +86,8 @@ export default function RouteTester({ inboundTags, isMobile }: RouteTesterProps)
           />
         </Col>
         <Col xs={12} sm={3}>
-          <OptionButtons
+          <Select
+            aria-label={t('pages.inbounds.network')}
             style={{ width: '100%' }}
             value={network}
             onChange={setNetwork}
@@ -97,6 +99,7 @@ export default function RouteTester({ inboundTags, isMobile }: RouteTesterProps)
         </Col>
         <Col xs={12} sm={4}>
           <Select
+            aria-label={t('pages.xray.routeTesterInbound')}
             style={{ width: '100%' }}
             placeholder={t('pages.xray.routeTesterInbound')}
             allowClear
@@ -109,6 +112,7 @@ export default function RouteTester({ inboundTags, isMobile }: RouteTesterProps)
         </Col>
         <Col xs={12} sm={4}>
           <Select
+            aria-label={t('pages.xray.routeTesterProtocol')}
             style={{ width: '100%' }}
             placeholder={t('pages.xray.routeTesterProtocol')}
             allowClear

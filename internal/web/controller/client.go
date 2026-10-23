@@ -2,10 +2,13 @@ package controller
 
 import (
 	"encoding/json"
+	"errors"
+	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
+	"github.com/mhsanaei/3x-ui/v3/internal/web/entity"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/service"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/session"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/websocket"
@@ -30,7 +33,9 @@ func (a *ClientController) enforceResellerQuota(c *gin.Context) bool {
 	// Reload fresh quota + counters from DB; the session copy may predate them.
 	fresh, err := a.adminService.GetUserByID(actor.Id)
 	if err != nil {
-		return true
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		c.Abort()
+		return false
 	}
 	stats := a.adminService.GetResellerStats(fresh)
 	if stats.ClientQuota > 0 && stats.CurrentClients+1 > stats.ClientQuota {
@@ -75,47 +80,58 @@ type ClientController struct {
 	xrayService    service.XrayService
 	settingService service.SettingService
 	adminService   service.AdminService
-	deviceService  service.ClientDeviceService
+	happGenerator  service.HappLinkGenerator
 }
 
 func NewClientController(g *gin.RouterGroup) *ClientController {
 	a := &ClientController{}
+	a.happGenerator = service.NewHappService(&a.clientService, &a.settingService)
 	a.initRouter(g)
 	return a
 }
 
 func (a *ClientController) initRouter(g *gin.RouterGroup) {
+	scopeEmail := func(c *gin.Context) {
+		if guardClientEmailScope(c, &a.clientService, c.Param("email")) { c.Next() }
+	}
+	scopeSubID := func(c *gin.Context) {
+		if guardClientSubIdScope(c, &a.clientService, c.Param("subId")) { c.Next() }
+	}
 	g.GET("/list", a.list)
 	g.GET("/list/paged", a.listPaged)
-	g.GET("/get/:email", a.get)
-	g.GET("/traffic/:email", a.getTrafficByEmail)
-	g.GET("/subLinks/:subId", a.getSubLinks)
-	g.GET("/links/:email", a.getClientLinks)
+	g.GET("/get/:email", scopeEmail, a.get)
+	g.GET("/get/tgId/:tgId", a.getByTgId)
+	g.GET("/traffic/:email", scopeEmail, a.getTrafficByEmail)
+	g.GET("/subLinks/:subId", scopeSubID, a.getSubLinks)
+	g.GET("/links/:email", scopeEmail, a.getClientLinks)
+	g.POST("/happLink/:id", a.generateHappLink)
 
 	g.POST("/add", a.create)
-	g.POST("/update/:email", a.update)
-	g.POST("/del/:email", a.delete)
-	g.POST("/:email/attach", a.attach)
-	g.POST("/:email/detach", a.detach)
-	g.POST("/:email/externalLinks", a.setExternalLinks)
-	g.GET("/export", rejectReseller, a.export)
-	g.POST("/import", rejectReseller, a.importClients)
-	g.POST("/delOrphans", rejectReseller, a.delOrphans)
-	g.POST("/resetAllTraffics", rejectReseller, a.resetAllTraffics)
-	g.POST("/delDepleted", rejectReseller, a.delDepleted)
-	g.POST("/bulkAdjust", rejectReseller, a.bulkAdjust)
-	g.POST("/bulkDel", rejectReseller, a.bulkDelete)
-	g.POST("/bulkCreate", rejectReseller, a.bulkCreate)
-	g.POST("/bulkAttach", rejectReseller, a.bulkAttach)
-	g.POST("/bulkDetach", rejectReseller, a.bulkDetach)
-	g.POST("/bulkResetTraffic", rejectReseller, a.bulkResetTraffic)
-	g.POST("/resetTraffic/:email", a.resetTrafficByEmail)
-	g.POST("/updateTraffic/:email", a.updateTrafficByEmail)
-	g.POST("/ips/:email", a.getIps)
-	g.POST("/clearIps/:email", a.clearIps)
-	g.GET("/devices/:email", a.getDevices)
-	g.POST("/devices/:email/del/:id", a.deleteDevice)
-	g.POST("/devices/:email/clear", a.clearDevices)
+	g.POST("/update/:email", scopeEmail, a.update)
+	g.POST("/del/:email", scopeEmail, a.delete)
+	g.POST("/:email/attach", scopeEmail, a.attach)
+	g.POST("/:email/detach", scopeEmail, a.detach)
+	g.POST("/:email/externalLinks", scopeEmail, a.setExternalLinks)
+	g.GET("/export", a.export)
+	g.POST("/import", a.importClients)
+	g.POST("/delOrphans", a.delOrphans)
+	g.POST("/resetAllTraffics", a.resetAllTraffics)
+	g.POST("/delDepleted", a.delDepleted)
+	g.POST("/bulkAdjust", a.bulkAdjust)
+	g.POST("/bulkEnable", a.bulkEnable)
+	g.POST("/bulkDisable", a.bulkDisable)
+	g.POST("/bulkDel", a.bulkDelete)
+	g.POST("/bulkCreate", a.bulkCreate)
+	g.POST("/bulkAttach", a.bulkAttach)
+	g.POST("/bulkDetach", a.bulkDetach)
+	g.POST("/bulkResetTraffic", a.bulkResetTraffic)
+	g.POST("/resetTraffic/:email", scopeEmail, a.resetTrafficByEmail)
+	g.POST("/updateTraffic/:email", scopeEmail, a.updateTrafficByEmail)
+	g.POST("/ips/:email", scopeEmail, a.getIps)
+	g.POST("/clearIps/:email", scopeEmail, a.clearIps)
+	g.POST("/hwids/:email", scopeEmail, a.getHwids)
+	g.DELETE("/hwids/:email", scopeEmail, a.clearHwids)
+	g.DELETE("/hwids/:email/:id", scopeEmail, a.deleteHwid)
 	g.POST("/onlines", a.onlines)
 	g.POST("/onlinesByGuid", a.onlinesByGuid)
 	g.POST("/clientIpsByGuid", a.clientIpsByGuid)
@@ -138,9 +154,9 @@ func (a *ClientController) listPaged(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.obtain"), err)
 		return
 	}
-	if ids, isReseller := resellerInboundSlice(c); isReseller {
-		params.Restricted = true
-		params.RestrictInbounds = ids
+	if session.IsScoped(c) {
+		params.ScopeEnabled = true
+		params.ScopeInboundIDs = service.AllowedInboundIDs(session.GetLoginUser(c))
 	}
 	resp, err := a.clientService.ListPaged(&a.inboundService, &a.settingService, params)
 	if err != nil {
@@ -150,40 +166,74 @@ func (a *ClientController) listPaged(c *gin.Context) {
 	jsonObj(c, resp, nil)
 }
 
-func (a *ClientController) get(c *gin.Context) {
-	email := c.Param("email")
-	if !guardClientEmailScope(c, &a.clientService, email) {
-		return
-	}
-	rec, err := a.clientService.GetRecordByEmail(nil, email)
-	if err != nil {
-		jsonMsg(c, I18nWeb(c, "get"), err)
-		return
-	}
+func (a *ClientController) buildClientPayload(rec *model.ClientRecord) (gin.H, error) {
 	inboundIds, err := a.clientService.GetInboundIdsForRecord(rec.Id)
 	if err != nil {
-		jsonMsg(c, I18nWeb(c, "get"), err)
-		return
+		return nil, err
 	}
 	externalLinks, err := a.clientService.GetExternalLinksForRecord(rec.Id)
 	if err != nil {
-		jsonMsg(c, I18nWeb(c, "get"), err)
-		return
+		return nil, err
 	}
 	flow, err := a.clientService.EffectiveFlow(nil, rec.Id)
 	if err != nil {
-		jsonMsg(c, I18nWeb(c, "get"), err)
-		return
+		return nil, err
 	}
 	rec.Flow = flow
-	// Consumed bytes (up+down, including cross-node global overlay) so API
-	// consumers can pair usage with the client's totalGB quota (#4973).
-	// Best-effort: a traffic lookup failure must not break the client fetch.
 	var usedTraffic int64
-	if t, tErr := a.inboundService.GetClientTrafficByEmail(email); tErr == nil && t != nil {
+	if t, tErr := a.inboundService.GetClientTrafficByEmail(rec.Email); tErr == nil && t != nil {
 		usedTraffic = t.Up + t.Down
 	}
-	jsonObj(c, gin.H{"client": rec, "inboundIds": inboundIds, "externalLinks": externalLinks, "usedTraffic": usedTraffic}, nil)
+	tunnelAllowedIPs, err := a.clientService.TunnelAllowedIPsByInbound(&a.inboundService, rec.Email, inboundIds)
+	if err != nil {
+		return nil, err
+	}
+	return gin.H{
+		"client":           rec,
+		"inboundIds":       inboundIds,
+		"externalLinks":    externalLinks,
+		"usedTraffic":      usedTraffic,
+		"tunnelAllowedIPs": tunnelAllowedIPs,
+	}, nil
+}
+
+func (a *ClientController) get(c *gin.Context) {
+	email := c.Param("email")
+	rec, err := a.clientService.GetRecordByEmail(nil, email)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.obtain"), err)
+		return
+	}
+	payload, err := a.buildClientPayload(rec)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.obtain"), err)
+		return
+	}
+	jsonObj(c, payload, nil)
+}
+
+func (a *ClientController) getByTgId(c *gin.Context) {
+	tgIdStr := c.Param("tgId")
+	tgId, err := strconv.ParseInt(tgIdStr, 10, 64)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.obtain"), err)
+		return
+	}
+	records, err := a.clientService.GetRecordsByTgID(tgId)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.obtain"), err)
+		return
+	}
+	results := make([]gin.H, 0, len(records))
+	for _, rec := range records {
+		payload, err := a.buildClientPayload(rec)
+		if err != nil {
+			jsonMsg(c, I18nWeb(c, "get"), err)
+			return
+		}
+		results = append(results, payload)
+	}
+	jsonObj(c, results, nil)
 }
 
 func (a *ClientController) create(c *gin.Context) {
@@ -199,57 +249,72 @@ func (a *ClientController) create(c *gin.Context) {
 		return
 	}
 	needRestart, err := a.clientService.Create(&a.inboundService, &payload)
+	// Flagged before the error check: a partly-applied create leaves clients
+	// committed on the inbounds that succeeded, and those still need the restart.
+	if needRestart {
+		a.xrayService.SetToNeedRestart()
+	}
+	// A partly-applied call committed real clients; a rejected one touched
+	// nothing, and broadcasting those would refetch every panel for nothing.
+	if needRestart || err == nil {
+		notifyClientsChanged()
+	}
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
 	a.incrementResellerCreated(c, 1)
 	jsonMsgObj(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientAddSuccess"), pendingNodeObj(a.inboundService.AnyNodePending(payload.InboundIds)), nil)
-	if needRestart {
-		a.xrayService.SetToNeedRestart()
-	}
-	notifyClientsChanged()
 }
 
 func (a *ClientController) update(c *gin.Context) {
 	email := c.Param("email")
-	if !guardClientEmailScope(c, &a.clientService, email) {
-		return
+	var req struct {
+		model.Client
+		LimitHwid int `json:"limitHwid"`
 	}
-	var updated model.Client
-	if err := c.ShouldBindJSON(&updated); err != nil {
+	if err := c.ShouldBindJSON(&req); err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
 	inboundFilter := parseInboundIdsQuery(c.Query("inboundIds"))
-	needRestart, err := a.clientService.UpdateByEmail(&a.inboundService, email, updated, inboundFilter...)
+	needRestart, err := a.clientService.UpdateByEmail(&a.inboundService, email, req.Client, req.LimitHwid, inboundFilter...)
+	// Flagged before the error check: a partly-applied edit leaves the change
+	// committed on the inbounds that succeeded, and those still need the restart.
+	if needRestart {
+		a.xrayService.SetToNeedRestart()
+	}
+	// A partly-applied call committed real changes; a rejected one touched
+	// nothing, and broadcasting those would refetch every panel for nothing.
+	if needRestart || err == nil {
+		notifyClientsChanged()
+	}
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
 	jsonMsgObj(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientUpdateSuccess"), pendingNodeObj(a.clientService.HasPendingNode(&a.inboundService, email)), nil)
-	if needRestart {
-		a.xrayService.SetToNeedRestart()
-	}
-	notifyClientsChanged()
 }
 
 func (a *ClientController) delete(c *gin.Context) {
 	email := c.Param("email")
-	if !guardClientEmailScope(c, &a.clientService, email) {
-		return
-	}
 	keepTraffic := c.Query("keepTraffic") == "1"
 	needRestart, err := a.clientService.DeleteByEmail(&a.inboundService, email, keepTraffic)
+	// Flagged before the error check: a partly-applied delete already removed
+	// the client from the inbounds that succeeded, and those need the restart.
+	if needRestart {
+		a.xrayService.SetToNeedRestart()
+	}
+	// A partly-applied call committed real removals; a rejected one touched
+	// nothing, and broadcasting those would refetch every panel for nothing.
+	if needRestart || err == nil {
+		notifyClientsChanged()
+	}
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
 	jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientDeleteSuccess"), nil)
-	if needRestart {
-		a.xrayService.SetToNeedRestart()
-	}
-	notifyClientsChanged()
 }
 
 type attachDetachBody struct {
@@ -267,29 +332,27 @@ func (a *ClientController) attach(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
-	if !guardClientEmailScope(c, &a.clientService, email) {
-		return
-	}
 	if !guardInboundIdsScope(c, body.InboundIds) {
 		return
 	}
 	needRestart, err := a.clientService.AttachByEmail(&a.inboundService, email, body.InboundIds)
+	if needRestart {
+		a.xrayService.SetToNeedRestart()
+	}
+	// A partly-applied call committed real clients; a rejected one touched
+	// nothing, and broadcasting those would refetch every panel for nothing.
+	if needRestart || err == nil {
+		notifyClientsChanged()
+	}
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
 	jsonMsgObj(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientAddSuccess"), pendingNodeObj(a.inboundService.AnyNodePending(body.InboundIds)), nil)
-	if needRestart {
-		a.xrayService.SetToNeedRestart()
-	}
-	notifyClientsChanged()
 }
 
 func (a *ClientController) setExternalLinks(c *gin.Context) {
 	email := c.Param("email")
-	if !guardClientEmailScope(c, &a.clientService, email) {
-		return
-	}
 	var body externalLinksBody
 	if err := c.ShouldBindJSON(&body); err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
@@ -317,9 +380,12 @@ func (a *ClientController) resetAllTraffics(c *gin.Context) {
 }
 
 type bulkAdjustRequest struct {
-	Emails   []string `json:"emails"`
-	AddDays  int      `json:"addDays"`
-	AddBytes int64    `json:"addBytes"`
+	Emails    []string `json:"emails"`
+	AddDays   int      `json:"addDays"`
+	AddBytes  int64    `json:"addBytes"`
+	Flow      string   `json:"flow"`
+	LimitHwid *int     `json:"limitHwid"`
+	AdTag     string   `json:"adTag"`
 }
 
 func (a *ClientController) bulkAdjust(c *gin.Context) {
@@ -328,7 +394,7 @@ func (a *ClientController) bulkAdjust(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
-	result, needRestart, err := a.clientService.BulkAdjust(&a.inboundService, req.Emails, req.AddDays, req.AddBytes)
+	result, needRestart, err := a.clientService.BulkAdjust(&a.inboundService, req.Emails, req.AddDays, req.AddBytes, req.Flow, req.LimitHwid, req.AdTag)
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
@@ -398,6 +464,36 @@ func (a *ClientController) bulkDelete(c *gin.Context) {
 		return
 	}
 	result, needRestart, err := a.clientService.BulkDelete(&a.inboundService, req.Emails, req.KeepTraffic)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	jsonObj(c, result, nil)
+	if needRestart {
+		a.xrayService.SetToNeedRestart()
+	}
+	notifyClientsChanged()
+}
+
+type bulkEnableRequest struct {
+	Emails []string `json:"emails"`
+}
+
+func (a *ClientController) bulkEnable(c *gin.Context) {
+	a.bulkSetEnable(c, true)
+}
+
+func (a *ClientController) bulkDisable(c *gin.Context) {
+	a.bulkSetEnable(c, false)
+}
+
+func (a *ClientController) bulkSetEnable(c *gin.Context, enable bool) {
+	var req bulkEnableRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	result, needRestart, err := a.clientService.BulkSetEnable(&a.inboundService, req.Emails, enable)
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
@@ -494,9 +590,6 @@ func (a *ClientController) delOrphans(c *gin.Context) {
 
 func (a *ClientController) resetTrafficByEmail(c *gin.Context) {
 	email := c.Param("email")
-	if !guardClientEmailScope(c, &a.clientService, email) {
-		return
-	}
 	needRestart, err := a.clientService.ResetTrafficByEmail(&a.inboundService, email)
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
@@ -516,9 +609,6 @@ type trafficUpdateRequest struct {
 
 func (a *ClientController) updateTrafficByEmail(c *gin.Context) {
 	email := c.Param("email")
-	if !guardClientEmailScope(c, &a.clientService, email) {
-		return
-	}
 	var req trafficUpdateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
@@ -534,70 +624,8 @@ func (a *ClientController) updateTrafficByEmail(c *gin.Context) {
 
 func (a *ClientController) getIps(c *gin.Context) {
 	email := c.Param("email")
-	if !guardClientEmailScope(c, &a.clientService, email) {
-		return
-	}
 	infos, err := a.inboundService.GetClientIpsWithNodes(email)
 	jsonObj(c, infos, err)
-}
-
-// getDevices lists the devices (HWIDs) registered against a client, together
-// with the cap in force for it, so the UI can show "3 of 5 devices used"
-// without deriving the effective limit itself.
-func (a *ClientController) getDevices(c *gin.Context) {
-	email := c.Param("email")
-	if !guardClientEmailScope(c, &a.clientService, email) {
-		return
-	}
-	devices, err := a.deviceService.List(email)
-	if err != nil {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
-		return
-	}
-	limit, err := a.deviceService.EffectiveLimit(email)
-	if err != nil {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
-		return
-	}
-	jsonObj(c, gin.H{
-		"devices": devices,
-		"limit":   limit,
-		"enabled": a.deviceService.Enabled(),
-	}, nil)
-}
-
-// deleteDevice releases a single device slot — the usual fix when a user
-// replaced a phone and cannot register the new one.
-func (a *ClientController) deleteDevice(c *gin.Context) {
-	email := c.Param("email")
-	if !guardClientEmailScope(c, &a.clientService, email) {
-		return
-	}
-	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
-		return
-	}
-	if err := a.deviceService.Delete(email, id); err != nil {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
-		return
-	}
-	jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.updateSuccess"), nil)
-}
-
-// clearDevices forgets every device of a client, letting them re-register from
-// scratch on the next subscription fetch.
-func (a *ClientController) clearDevices(c *gin.Context) {
-	email := c.Param("email")
-	if !guardClientEmailScope(c, &a.clientService, email) {
-		return
-	}
-	removed, err := a.deviceService.Clear(email)
-	if err != nil {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
-		return
-	}
-	jsonObj(c, gin.H{"deleted": removed}, nil)
 }
 
 func (a *ClientController) clientIpsByGuid(c *gin.Context) {
@@ -607,9 +635,6 @@ func (a *ClientController) clientIpsByGuid(c *gin.Context) {
 
 func (a *ClientController) clearIps(c *gin.Context) {
 	email := c.Param("email")
-	if !guardClientEmailScope(c, &a.clientService, email) {
-		return
-	}
 	if err := a.inboundService.ClearClientIps(email); err != nil {
 		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.updateSuccess"), err)
 		return
@@ -617,54 +642,38 @@ func (a *ClientController) clearIps(c *gin.Context) {
 	jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.logCleanSuccess"), nil)
 }
 
-func (a *ClientController) onlines(c *gin.Context) {
-	list := a.inboundService.GetOnlineClients()
-	if set, ok := a.resellerEmailSet(c); ok {
-		filtered := make([]string, 0, len(list))
-		for _, e := range list {
-			if _, in := set[e]; in {
-				filtered = append(filtered, e)
-			}
-		}
-		list = filtered
+func (a *ClientController) getHwids(c *gin.Context) {
+	infos, err := a.clientService.ListClientHwids(c.Param("email"))
+	jsonObj(c, infos, err)
+}
+
+func (a *ClientController) clearHwids(c *gin.Context) {
+	if err := a.clientService.ClearClientHwids(c.Param("email")); err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.updateSuccess"), err)
+		return
 	}
-	jsonObj(c, list, nil)
+	jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.logCleanSuccess"), nil)
+}
+
+func (a *ClientController) deleteHwid(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	if err := a.clientService.DeleteClientHwid(c.Param("email"), id); err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	jsonMsg(c, I18nWeb(c, "pages.clients.hwidDeleted"), nil)
+}
+
+func (a *ClientController) onlines(c *gin.Context) {
+	jsonObj(c, a.inboundService.GetOnlineClients(), nil)
 }
 
 func (a *ClientController) onlinesByGuid(c *gin.Context) {
-	byGuid := a.inboundService.GetOnlineClientsByGuid()
-	if set, ok := a.resellerEmailSet(c); ok {
-		for guid, emails := range byGuid {
-			filtered := make([]string, 0, len(emails))
-			for _, e := range emails {
-				if _, in := set[e]; in {
-					filtered = append(filtered, e)
-				}
-			}
-			byGuid[guid] = filtered
-		}
-	}
-	jsonObj(c, byGuid, nil)
-}
-
-// resellerEmailSet returns the set of client emails the logged-in reseller is
-// allowed to see (clients attached to one of their inbounds). ok=false for
-// non-reseller roles, which must see panel-wide data unchanged.
-func (a *ClientController) resellerEmailSet(c *gin.Context) (map[string]struct{}, bool) {
-	if _, isReseller := resellerAllowedSet(c); !isReseller {
-		return nil, false
-	}
-	set := map[string]struct{}{}
-	all, err := a.clientService.List()
-	if err != nil {
-		return set, true
-	}
-	for _, r := range filterClientsForRole(c, all) {
-		if r.Email != "" {
-			set[r.Email] = struct{}{}
-		}
-	}
-	return set, true
+	jsonObj(c, a.inboundService.GetOnlineClientsByGuid(), nil)
 }
 
 func (a *ClientController) activeInbounds(c *gin.Context) {
@@ -678,9 +687,6 @@ func (a *ClientController) lastOnline(c *gin.Context) {
 
 func (a *ClientController) getTrafficByEmail(c *gin.Context) {
 	email := c.Param("email")
-	if !guardClientEmailScope(c, &a.clientService, email) {
-		return
-	}
 	traffic, err := a.inboundService.GetClientTrafficByEmail(email)
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.trafficGetError"), err)
@@ -690,11 +696,7 @@ func (a *ClientController) getTrafficByEmail(c *gin.Context) {
 }
 
 func (a *ClientController) getSubLinks(c *gin.Context) {
-	subId := c.Param("subId")
-	if !guardClientSubIdScope(c, &a.clientService, subId) {
-		return
-	}
-	links, err := a.inboundService.GetSubLinks(resolveHost(c), subId)
+	links, err := a.inboundService.GetSubLinks(resolveHost(c), c.Param("subId"))
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.obtain"), err)
 		return
@@ -703,16 +705,32 @@ func (a *ClientController) getSubLinks(c *gin.Context) {
 }
 
 func (a *ClientController) getClientLinks(c *gin.Context) {
-	email := c.Param("email")
-	if !guardClientEmailScope(c, &a.clientService, email) {
-		return
-	}
 	links, err := a.inboundService.GetAllClientLinks(resolveHost(c), c.Param("email"))
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.obtain"), err)
 		return
 	}
 	jsonObj(c, links, nil)
+}
+
+func (a *ClientController) generateHappLink(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	clientID, err := strconv.Atoi(c.Param("id"))
+	if err != nil || clientID < 1 {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), service.ErrHappLinkUnavailable)
+		return
+	}
+	result, err := a.happGenerator.Generate(c.Request.Context(), clientID, c.Request.Host)
+	if err != nil {
+		if errors.Is(err, service.ErrHappSourceTooLong) {
+			// Keep the code exact so clients can localize it without exposing internal error details.
+			c.JSON(http.StatusOK, entity.Msg{Success: false, Msg: "happ_source_too_long", Obj: nil})
+			return
+		}
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), service.ErrHappLinkUnavailable)
+		return
+	}
+	jsonObj(c, result, nil)
 }
 
 func (a *ClientController) detach(c *gin.Context) {
@@ -722,22 +740,25 @@ func (a *ClientController) detach(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
-	if !guardClientEmailScope(c, &a.clientService, email) {
-		return
-	}
 	if !guardInboundIdsScope(c, body.InboundIds) {
 		return
 	}
 	needRestart, err := a.clientService.DetachByEmailMany(&a.inboundService, email, body.InboundIds)
+	// Flagged before the error check: a partly-applied detach already removed
+	// the client from the inbounds that succeeded, and those need the restart.
+	if needRestart {
+		a.xrayService.SetToNeedRestart()
+	}
+	// A partly-applied call committed real removals; a rejected one touched
+	// nothing, and broadcasting those would refetch every panel for nothing.
+	if needRestart || err == nil {
+		notifyClientsChanged()
+	}
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
 	jsonMsgObj(c, I18nWeb(c, "pages.inbounds.toasts.inboundClientDeleteSuccess"), pendingNodeObj(a.inboundService.AnyNodePending(body.InboundIds)), nil)
-	if needRestart {
-		a.xrayService.SetToNeedRestart()
-	}
-	notifyClientsChanged()
 }
 
 type bulkResetRequest struct {

@@ -2,15 +2,17 @@ import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button, Divider, Form, Input, InputNumber, Modal, Select, Space, Switch } from 'antd';
 import { MinusOutlined, PlusOutlined } from '@ant-design/icons';
+import { FormProvider, useForm, useWatch } from 'react-hook-form';
 
 import { InputAddon } from '@/components/ui';
+import { FormField, rhfZodValidate } from '@/components/form/rhf';
 import {
   DnsQueryStrategySchema,
   DnsServerObjectInnerSchema,
   DnsServerObjectSchema,
+  isEncryptedDnsAddress,
   type DnsServerObject,
 } from '@/schemas/dns';
-import { antdRule } from '@/utils/zodForm';
 
 export type DnsServerValue =
   | string
@@ -90,25 +92,24 @@ function valuesFromServer(server: DnsServerValue | null): DnsServerForm {
 }
 
 function valuesToWire(values: DnsServerForm): DnsServerValue {
-  const isPlain
-    = values.domains.length === 0
-    && values.expectedIPs.length === 0
-    && values.unexpectedIPs.length === 0
-    && values.port === 53
-    && values.queryStrategy === 'UseIP'
-    && values.skipFallback === false
-    && values.disableCache === false
-    && values.finalQuery === false
-    && !values.tag
-    && !values.clientIP
-    && values.serveStale === false
-    && values.serveExpiredTTL === 0
-    && values.timeoutMs === 4000;
+  const isPlain =
+    values.domains.length === 0 &&
+    values.expectedIPs.length === 0 &&
+    values.unexpectedIPs.length === 0 &&
+    values.port === 53 &&
+    values.queryStrategy === 'UseIP' &&
+    values.skipFallback === false &&
+    values.disableCache === false &&
+    values.finalQuery === false &&
+    !values.tag &&
+    !values.clientIP &&
+    values.serveStale === false &&
+    values.serveExpiredTTL === 0 &&
+    values.timeoutMs === 4000;
   if (isPlain) return values.address;
 
   const out: Record<string, unknown> = {
     address: values.address,
-    port: values.port,
     domains: values.domains.filter(Boolean),
     expectedIPs: values.expectedIPs.filter(Boolean),
     unexpectedIPs: values.unexpectedIPs.filter(Boolean),
@@ -120,6 +121,7 @@ function valuesToWire(values: DnsServerForm): DnsServerValue {
     serveExpiredTTL: values.serveExpiredTTL,
     timeoutMs: values.timeoutMs,
   };
+  if (!isEncryptedDnsAddress(values.address)) out.port = values.port;
   if (values.tag) out.tag = values.tag;
   if (values.clientIP) out.clientIP = values.clientIP;
   return out as DnsServerValue;
@@ -135,17 +137,21 @@ export default function DnsServerModal({
   onConfirm,
 }: DnsServerModalProps) {
   const { t } = useTranslation();
-  const [form] = Form.useForm<DnsServerForm>();
+  const methods = useForm<DnsServerForm>({
+    defaultValues: defaultFormValues(),
+  });
+  const address = useWatch({ control: methods.control, name: 'address' }) ?? '';
+  // Xray ignores port for DoH/DoHL/DoQL, so valuesToWire never stores one:
+  // offering the field there discards whatever is typed into it.
+  const portApplies = !isEncryptedDnsAddress(address);
+  const domains = useWatch({ control: methods.control, name: 'domains' }) ?? [];
+  const expectedIPs = useWatch({ control: methods.control, name: 'expectedIPs' }) ?? [];
+  const unexpectedIPs = useWatch({ control: methods.control, name: 'unexpectedIPs' }) ?? [];
 
   useEffect(() => {
     if (!open) return;
-    form.setFieldsValue(valuesFromServer(server));
-  }, [open, server, form]);
-
-  async function submit() {
-    const values = await form.validateFields();
-    onConfirm(valuesToWire(values));
-  }
+    methods.reset(valuesFromServer(server));
+  }, [open, server, methods]);
 
   const title = isEdit ? t('pages.xray.dns.edit') : t('pages.xray.dns.add');
 
@@ -156,124 +162,160 @@ export default function DnsServerModal({
       okText={t('confirm')}
       cancelText={t('close')}
       mask={{ closable: false }}
-      onOk={submit}
+      onOk={methods.handleSubmit((values) => onConfirm(valuesToWire(values)))}
       onCancel={onClose}
     >
-      <Form
-        form={form}
-        colon={false}
-        labelCol={{ md: { span: 8 } }}
-        wrapperCol={{ md: { span: 14 } }}
-        initialValues={defaultFormValues()}
-      >
-        <Form.Item
-          label={t('pages.inbounds.address')}
-          name="address"
-          rules={[antdRule(shape.address, t)]}
-        >
-          <Input />
-        </Form.Item>
-        <Form.Item
-          label={t('pages.inbounds.port')}
-          name="port"
-          rules={[antdRule(shape.port, t)]}
-        >
-          <InputNumber min={1} max={65535} />
-        </Form.Item>
-        <Form.Item label={t('pages.xray.dns.tag')} name="tag">
-          <Input />
-        </Form.Item>
-        <Form.Item label={t('pages.xray.dns.clientIp')} name="clientIP">
-          <Input />
-        </Form.Item>
-        <Form.Item label={t('pages.xray.dns.strategy')} name="queryStrategy">
-          <Select
-            style={{ width: '100%' }}
-            options={STRATEGIES.map((s) => ({ value: s, label: s }))}
-          />
-        </Form.Item>
-        <Form.Item
-          label={t('pages.xray.dns.timeoutMs')}
-          name="timeoutMs"
-          rules={[antdRule(shape.timeoutMs, t)]}
-        >
-          <InputNumber min={0} step={500} />
-        </Form.Item>
-
-        <Divider style={{ margin: '5px 0' }} />
-
-        <Form.List name="domains">
-          {(fields, { add, remove }) => (
-            <Form.Item label={t('pages.xray.dns.domains')}>
-              <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => add('')} />
-              {fields.map((field) => (
-                <Space.Compact key={field.key} block style={{ marginTop: 4 }}>
-                  <Form.Item name={field.name} noStyle>
-                    <Input />
-                  </Form.Item>
-                  <InputAddon onClick={() => remove(field.name)}>
-                    <MinusOutlined />
-                  </InputAddon>
-                </Space.Compact>
-              ))}
-            </Form.Item>
+      <FormProvider {...methods}>
+        <Form colon={false} labelCol={{ md: { span: 8 } }} wrapperCol={{ md: { span: 14 } }}>
+          <FormField
+            label={t('pages.inbounds.address')}
+            name="address"
+            rules={{ validate: rhfZodValidate(shape.address) }}
+          >
+            <Input />
+          </FormField>
+          {portApplies && (
+            <FormField
+              label={t('pages.inbounds.port')}
+              name="port"
+              rules={{ validate: rhfZodValidate(shape.port) }}
+            >
+              <InputNumber min={1} max={65535} />
+            </FormField>
           )}
-        </Form.List>
+          <FormField label={t('pages.xray.dns.tag')} name="tag">
+            <Input />
+          </FormField>
+          <FormField label={t('pages.xray.dns.clientIp')} name="clientIP">
+            <Input />
+          </FormField>
+          <FormField label={t('pages.xray.dns.strategy')} name="queryStrategy">
+            <Select
+              style={{ width: '100%' }}
+              options={STRATEGIES.map((s) => ({ value: s, label: s }))}
+            />
+          </FormField>
+          <FormField
+            label={t('pages.xray.dns.timeoutMs')}
+            name="timeoutMs"
+            rules={{ validate: rhfZodValidate(shape.timeoutMs) }}
+          >
+            <InputNumber min={0} step={500} />
+          </FormField>
 
-        <Form.List name="expectedIPs">
-          {(fields, { add, remove }) => (
-            <Form.Item label={t('pages.xray.dns.expectIPs')}>
-              <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => add('')} />
-              {fields.map((field) => (
-                <Space.Compact key={field.key} block style={{ marginTop: 4 }}>
-                  <Form.Item name={field.name} noStyle>
-                    <Input />
-                  </Form.Item>
-                  <InputAddon onClick={() => remove(field.name)}>
-                    <MinusOutlined />
-                  </InputAddon>
-                </Space.Compact>
-              ))}
-            </Form.Item>
-          )}
-        </Form.List>
+          <Divider style={{ margin: '5px 0' }} />
 
-        <Form.List name="unexpectedIPs">
-          {(fields, { add, remove }) => (
-            <Form.Item label={t('pages.xray.dns.unexpectIPs')}>
-              <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => add('')} />
-              {fields.map((field) => (
-                <Space.Compact key={field.key} block style={{ marginTop: 4 }}>
-                  <Form.Item name={field.name} noStyle>
-                    <Input />
-                  </Form.Item>
-                  <InputAddon onClick={() => remove(field.name)}>
-                    <MinusOutlined />
-                  </InputAddon>
-                </Space.Compact>
-              ))}
-            </Form.Item>
-          )}
-        </Form.List>
+          <Form.Item label={t('pages.xray.dns.domains')}>
+            <Button
+              size="small"
+              type="primary"
+              icon={<PlusOutlined />}
+              aria-label={t('add')}
+              onClick={() => methods.setValue('domains', [...domains, ''])}
+            />
+            {domains.map((_, i) => (
+              <Space.Compact key={i} block style={{ marginTop: 4 }}>
+                <FormField name={`domains.${i}`} noStyle>
+                  <Input />
+                </FormField>
+                <InputAddon
+                  ariaLabel={t('remove')}
+                  onClick={() =>
+                    methods.setValue(
+                      'domains',
+                      domains.filter((__, idx) => idx !== i),
+                    )
+                  }
+                >
+                  <MinusOutlined />
+                </InputAddon>
+              </Space.Compact>
+            ))}
+          </Form.Item>
 
-        <Divider style={{ margin: '5px 0' }} />
+          <Form.Item label={t('pages.xray.dns.expectIPs')}>
+            <Button
+              size="small"
+              type="primary"
+              icon={<PlusOutlined />}
+              aria-label={t('add')}
+              onClick={() => methods.setValue('expectedIPs', [...expectedIPs, ''])}
+            />
+            {expectedIPs.map((_, i) => (
+              <Space.Compact key={i} block style={{ marginTop: 4 }}>
+                <FormField name={`expectedIPs.${i}`} noStyle>
+                  <Input />
+                </FormField>
+                <InputAddon
+                  ariaLabel={t('remove')}
+                  onClick={() =>
+                    methods.setValue(
+                      'expectedIPs',
+                      expectedIPs.filter((__, idx) => idx !== i),
+                    )
+                  }
+                >
+                  <MinusOutlined />
+                </InputAddon>
+              </Space.Compact>
+            ))}
+          </Form.Item>
 
-        <Form.Item label={t('pages.xray.dns.skipFallback')} name="skipFallback" valuePropName="checked">
-          <Switch />
-        </Form.Item>
-        <Form.Item label={t('pages.xray.dns.finalQuery')} name="finalQuery" valuePropName="checked">
-          <Switch />
-        </Form.Item>
-        <Form.Item label={t('pages.xray.dns.disableCache')} name="disableCache" valuePropName="checked">
-          <Switch />
-        </Form.Item>
-        <Form.Item label={t('pages.xray.dns.serveStale')} name="serveStale" valuePropName="checked">
-          <Switch />
-        </Form.Item>
-        <Form.Item label={t('pages.xray.dns.serveExpiredTTL')} name="serveExpiredTTL">
-          <InputNumber min={0} step={60} />
-        </Form.Item>
-      </Form>
+          <Form.Item label={t('pages.xray.dns.unexpectIPs')}>
+            <Button
+              size="small"
+              type="primary"
+              icon={<PlusOutlined />}
+              aria-label={t('add')}
+              onClick={() => methods.setValue('unexpectedIPs', [...unexpectedIPs, ''])}
+            />
+            {unexpectedIPs.map((_, i) => (
+              <Space.Compact key={i} block style={{ marginTop: 4 }}>
+                <FormField name={`unexpectedIPs.${i}`} noStyle>
+                  <Input />
+                </FormField>
+                <InputAddon
+                  ariaLabel={t('remove')}
+                  onClick={() =>
+                    methods.setValue(
+                      'unexpectedIPs',
+                      unexpectedIPs.filter((__, idx) => idx !== i),
+                    )
+                  }
+                >
+                  <MinusOutlined />
+                </InputAddon>
+              </Space.Compact>
+            ))}
+          </Form.Item>
+
+          <Divider style={{ margin: '5px 0' }} />
+
+          <FormField
+            label={t('pages.xray.dns.skipFallback')}
+            name="skipFallback"
+            valueProp="checked"
+          >
+            <Switch />
+          </FormField>
+          <FormField label={t('pages.xray.dns.finalQuery')} name="finalQuery" valueProp="checked">
+            <Switch />
+          </FormField>
+          <FormField
+            label={t('pages.xray.dns.disableCache')}
+            name="disableCache"
+            valueProp="checked"
+          >
+            <Switch />
+          </FormField>
+          <FormField label={t('pages.xray.dns.serveStale')} name="serveStale" valueProp="checked">
+            <Switch />
+          </FormField>
+          <FormField label={t('pages.xray.dns.serveExpiredTTL')} name="serveExpiredTTL">
+            <InputNumber min={0} step={60} />
+          </FormField>
+        </Form>
+      </FormProvider>
     </Modal>
   );
 }

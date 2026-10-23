@@ -69,11 +69,14 @@ func (s *ClientService) BulkResetTraffic(inboundSvc *InboundService, emails []st
 		return 0, err
 	}
 	for _, e := range cleanEmails {
-		rec, err := s.GetRecordByEmail(nil, e)
-		if err == nil && !rec.Enable {
-			updated := rec.ToClient()
-			updated.Enable = true
-			s.Update(inboundSvc, rec.Id, *updated)
+		rec := recordsByEmail[e]
+		if rec == nil || rec.Enable {
+			continue
+		}
+		updated := rec.ToClient()
+		updated.Enable = true
+		if _, uErr := s.Update(inboundSvc, rec.Id, *updated, rec.LimitHwid); uErr != nil {
+			logger.Warning("Failed to auto-enable client during bulk traffic reset:", uErr)
 		}
 	}
 
@@ -81,6 +84,9 @@ func (s *ClientService) BulkResetTraffic(inboundSvc *InboundService, emails []st
 	err = submitTrafficWrite(func() error {
 		db := database.GetDB()
 		return db.Transaction(func(tx *gorm.DB) error {
+			if err := adjustGroupBaselinesForRemovedTraffic(tx, cleanEmails); err != nil {
+				return err
+			}
 			for _, batch := range chunkStrings(cleanEmails, sqlInChunk) {
 				res := tx.Model(xray.ClientTraffic{}).
 					Where("email IN ?", batch).
@@ -108,9 +114,13 @@ func (s *ClientService) BulkResetTraffic(inboundSvc *InboundService, emails []st
 }
 
 func (s *ClientService) ResetAllClientTraffics(inboundSvc *InboundService, id int) error {
-	return submitTrafficWrite(func() error {
+	err := submitTrafficWrite(func() error {
 		return s.resetAllClientTrafficsLocked(id)
 	})
+	if err == nil {
+		inboundSvc.resetAllMtprotoQuotas()
+	}
+	return err
 }
 
 func (s *ClientService) resetAllClientTrafficsLocked(id int) error {
@@ -137,6 +147,10 @@ func (s *ClientService) resetAllClientTrafficsLocked(id int) error {
 		}
 		if len(resetEmails) == 0 {
 			return nil
+		}
+
+		if err := adjustGroupBaselinesForRemovedTraffic(tx, resetEmails); err != nil {
+			return err
 		}
 
 		result := tx.Model(xray.ClientTraffic{}).
@@ -176,15 +190,24 @@ func (s *ClientService) resetAllClientTrafficsLocked(id int) error {
 }
 
 func (s *ClientService) ResetAllTraffics() (bool, error) {
-	db := database.GetDB()
-	res := db.Model(&xray.ClientTraffic{}).
-		Where("1 = 1").
-		Updates(map[string]any{"up": 0, "down": 0})
-	if res.Error != nil {
-		return false, res.Error
-	}
-	if err := db.Where("1 = 1").Delete(&model.ClientGlobalTraffic{}).Error; err != nil {
+	var affected int64
+	err := submitTrafficWrite(func() error {
+		return database.GetDB().Transaction(func(tx *gorm.DB) error {
+			res := tx.Model(&xray.ClientTraffic{}).
+				Where("1 = 1").
+				Updates(map[string]any{"enable": true, "up": 0, "down": 0})
+			if res.Error != nil {
+				return res.Error
+			}
+			affected = res.RowsAffected
+			if err := tx.Where("1 = 1").Delete(&model.ClientGlobalTraffic{}).Error; err != nil {
+				return err
+			}
+			return tx.Where("1 = 1").Delete(&model.NodeClientTraffic{}).Error
+		})
+	})
+	if err != nil {
 		return false, err
 	}
-	return res.RowsAffected > 0, nil
+	return affected > 0, nil
 }

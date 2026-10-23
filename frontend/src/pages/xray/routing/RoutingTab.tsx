@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button, Dropdown, Modal, Space, Table, Tabs, message } from 'antd';
 import {
@@ -14,13 +14,14 @@ import {
 import { catTabLabel } from '@/pages/settings/catTabLabel';
 import PromptModal from '@/components/feedback/PromptModal';
 import TextModal from '@/components/feedback/TextModal';
+import { isBalancerLoopbackTag } from '../balancers/balancer-loopback';
 import RoutingBasic from './RoutingBasic';
 import RouteTester from './RouteTester';
 import RuleFormModal from './RuleFormModal';
 import type { RoutingRule } from './RuleFormModal';
 import RuleCardList from './RuleCardList';
 import { useRoutingColumns } from './useRoutingColumns';
-import { arrJoin } from './helpers';
+import { arrJoin, originalRuleIndex } from './helpers';
 import type { RuleRow } from './types';
 import type { XraySettingsValue, SetTemplate } from '@/hooks/useXraySetting';
 import type { RuleObject } from '@/schemas/routing';
@@ -50,7 +51,12 @@ export default function RoutingTab({
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
-  const dragRef = useRef<{ from: number | null; to: number | null; startY: number; moved: boolean }>({
+  const dragRef = useRef<{
+    from: number | null;
+    to: number | null;
+    startY: number;
+    moved: boolean;
+  }>({
     from: null,
     to: null,
     startY: 0,
@@ -62,32 +68,43 @@ export default function RoutingTab({
     [templateSettings?.routing?.rules],
   );
   const rulesRef = useRef(rules);
-  rulesRef.current = rules;
+  const rowsRef = useRef<RuleRow[]>([]);
 
   const rows: RuleRow[] = useMemo(
     () =>
-      rules.map((rule, idx) => {
-        const r: RuleRow = { key: idx };
-        r.enabled = rule.enabled !== false;
-        r.domain = arrJoin(rule.domain);
-        r.ip = arrJoin(rule.ip);
-        r.port = rule.port;
-        r.sourcePort = rule.sourcePort;
-        r.vlessRoute = rule.vlessRoute;
-        r.network = rule.network;
-        r.sourceIP = arrJoin(rule.sourceIP);
-        r.user = arrJoin(rule.user);
-        r.inboundTag = arrJoin(rule.inboundTag);
-        r.protocol = arrJoin(rule.protocol);
-        if (rule.attrs && typeof rule.attrs === 'object' && !Array.isArray(rule.attrs)) {
-          r.attrs = JSON.stringify(rule.attrs, null, 2);
-        }
-        r.outboundTag = rule.outboundTag;
-        r.balancerTag = rule.balancerTag;
-        return r;
-      }),
+      rules
+        .map((rule, idx) => {
+          const r: RuleRow = { key: idx };
+          r.enabled = rule.enabled !== false;
+          r.domain = arrJoin(rule.domain);
+          r.ip = arrJoin(rule.ip);
+          r.port = rule.port;
+          r.sourcePort = rule.sourcePort;
+          r.vlessRoute = rule.vlessRoute;
+          r.network = rule.network;
+          r.sourceIP = arrJoin(rule.sourceIP);
+          r.user = arrJoin(rule.user);
+          r.inboundTag = arrJoin(rule.inboundTag);
+          r.protocol = arrJoin(rule.protocol);
+          if (rule.attrs && typeof rule.attrs === 'object' && !Array.isArray(rule.attrs)) {
+            r.attrs = JSON.stringify(rule.attrs, null, 2);
+          }
+          r.comment = rule.comment || undefined;
+          r.outboundTag = rule.outboundTag;
+          r.balancerTag = rule.balancerTag;
+          return r;
+        })
+        .filter((r) => {
+          const inboundTags = (rules[r.key]?.inboundTag || []) as string[];
+          return !inboundTags.some(isBalancerLoopbackTag);
+        }),
     [rules],
   );
+
+  useEffect(() => {
+    rulesRef.current = rules;
+    rowsRef.current = rows;
+  });
 
   const mutate = useCallback(
     (mutator: (next: XraySettingsValue) => void) => {
@@ -105,18 +122,22 @@ export default function RoutingTab({
     const seen = new Set<string>();
     const out: string[] = [];
     const push = (tag?: string) => {
-      if (!tag || seen.has(tag)) return;
+      if (!tag || seen.has(tag) || isBalancerLoopbackTag(tag)) return;
       seen.add(tag);
       out.push(tag);
     };
     for (const ib of (templateSettings?.inbounds as Array<{ tag?: string }>) || []) push(ib?.tag);
     for (const tag of inboundTags || []) push(tag);
     for (const ob of templateSettings?.outbounds || []) {
-      const obx = ob as { reverse?: { tag?: string }; settings?: { reverse?: { tag?: string }; inboundTag?: string } };
+      const obx = ob as {
+        reverse?: { tag?: string };
+        settings?: { reverse?: { tag?: string }; inboundTag?: string };
+      };
       push(obx?.reverse?.tag || obx?.settings?.reverse?.tag || obx?.settings?.inboundTag);
     }
     push((templateSettings?.dns as { tag?: string } | undefined)?.tag);
-    for (const s of (templateSettings?.dns as { servers?: Array<{ tag?: string }> } | undefined)?.servers || []) {
+    for (const s of (templateSettings?.dns as { servers?: Array<{ tag?: string }> } | undefined)
+      ?.servers || []) {
       if (typeof s === 'object' && s?.tag) push(s.tag);
     }
     return out;
@@ -187,8 +208,9 @@ export default function RoutingTab({
     setRuleModalOpen(true);
   }
   function openEdit(idx: number) {
-    setEditingRule(rulesRef.current[idx]);
-    setEditingIndex(idx);
+    const target = originalRuleIndex(rowsRef.current, idx);
+    setEditingRule(rulesRef.current[target]);
+    setEditingIndex(target);
     setRuleModalOpen(true);
   }
   function onRuleConfirm(rule: Record<string, unknown>) {
@@ -207,37 +229,45 @@ export default function RoutingTab({
   }
 
   function confirmDelete(idx: number) {
+    const target = originalRuleIndex(rowsRef.current, idx);
     modal.confirm({
       title: `${t('delete')} ${t('pages.xray.Routings')} #${idx + 1}?`,
       okText: t('delete'),
       okType: 'danger',
       cancelText: t('cancel'),
-      onOk: () => mutate((tt) => {
-        tt.routing?.rules?.splice(idx, 1);
-      }),
+      onOk: () =>
+        mutate((tt) => {
+          tt.routing?.rules?.splice(target, 1);
+        }),
     });
   }
 
   function moveUp(idx: number) {
     if (idx <= 0) return;
+    const target = originalRuleIndex(rowsRef.current, idx);
+    const prev = originalRuleIndex(rowsRef.current, idx - 1);
     mutate((tt) => {
       const list = tt.routing?.rules;
-      if (!list) return;
-      [list[idx - 1], list[idx]] = [list[idx], list[idx - 1]];
+      if (!list || !list[target] || !list[prev]) return;
+      [list[prev], list[target]] = [list[target], list[prev]];
     });
   }
   function moveDown(idx: number) {
+    if (idx >= rowsRef.current.length - 1) return;
+    const target = originalRuleIndex(rowsRef.current, idx);
+    const next = originalRuleIndex(rowsRef.current, idx + 1);
     mutate((tt) => {
       const list = tt.routing?.rules;
-      if (!list || idx >= list.length - 1) return;
-      [list[idx + 1], list[idx]] = [list[idx], list[idx + 1]];
+      if (!list || !list[target] || !list[next]) return;
+      [list[next], list[target]] = [list[target], list[next]];
     });
   }
   function toggleRule(idx: number, enabled: boolean) {
+    const target = originalRuleIndex(rowsRef.current, idx);
     mutate((tt) => {
       const list = tt.routing?.rules;
-      if (!list || !list[idx]) return;
-      list[idx].enabled = enabled;
+      if (!list || !list[target]) return;
+      list[target].enabled = enabled;
     });
   }
 
@@ -246,7 +276,9 @@ export default function RoutingTab({
     ev.preventDefault();
     try {
       (ev.currentTarget as Element).setPointerCapture(ev.pointerId);
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     dragRef.current = { from: idx, to: idx, startY: ev.clientY, moved: false };
     setDraggedIndex(idx);
     setDropTargetIndex(idx);
@@ -276,11 +308,13 @@ export default function RoutingTab({
       setDraggedIndex(null);
       setDropTargetIndex(null);
       if (!moved || from == null || to == null || from === to) return;
+      const fromOrig = originalRuleIndex(rowsRef.current, from);
+      const toOrig = originalRuleIndex(rowsRef.current, to);
       mutate((tt) => {
         const list = tt.routing?.rules;
         if (!list) return;
-        const [movedItem] = list.splice(from, 1);
-        list.splice(to, 0, movedItem);
+        const [movedItem] = list.splice(fromOrig, 1);
+        list.splice(toOrig, 0, movedItem);
       });
     };
 
@@ -339,8 +373,19 @@ export default function RoutingTab({
                     trigger={['click']}
                     menu={{
                       items: [
-                        { key: 'import', icon: <ImportOutlined />, label: t('pages.xray.importRules'), onClick: () => setImportOpen(true) },
-                        { key: 'export', icon: <ExportOutlined />, label: t('pages.xray.exportRules'), disabled: rules.length === 0, onClick: exportRules },
+                        {
+                          key: 'import',
+                          icon: <ImportOutlined />,
+                          label: t('pages.xray.importRules'),
+                          onClick: () => setImportOpen(true),
+                        },
+                        {
+                          key: 'export',
+                          icon: <ExportOutlined />,
+                          label: t('pages.xray.exportRules'),
+                          disabled: rules.length === 0,
+                          onClick: exportRules,
+                        },
                       ],
                     }}
                   >
@@ -376,7 +421,10 @@ export default function RoutingTab({
                       if (dropTargetIndex === i && draggedIndex !== i && draggedIndex != null) {
                         classes.push(i > draggedIndex ? 'drop-after' : 'drop-before');
                       }
-                      return { className: classes.join(' '), 'data-row-key': i } as React.HTMLAttributes<HTMLElement>;
+                      return {
+                        className: classes.join(' '),
+                        'data-row-key': i,
+                      } as React.HTMLAttributes<HTMLElement>;
                     }}
                   />
                 )}

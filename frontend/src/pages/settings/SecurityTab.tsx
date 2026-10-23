@@ -1,19 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import {
-  Button,
-  Empty,
-  Form,
-  Input,
-  Modal,
-  Space,
-  Spin,
-  Switch,
-  Tabs,
-  message,
-} from 'antd';
+import { Button, Empty, Form, Input, Modal, Space, Spin, Switch, Tabs, message } from 'antd';
 import { ApiOutlined, SafetyOutlined, UserOutlined } from '@ant-design/icons';
-import { ClipboardManager, HttpUtil, RandomUtil } from '@/utils';
+import { ClipboardManager, HttpUtil, IntlUtil, RandomUtil } from '@/utils';
 import type { AllSetting } from '@/models/setting';
 import { SettingListItem } from '@/components/ui';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
@@ -32,11 +21,20 @@ interface ApiTokenRow {
   name: string;
   enabled: boolean;
   createdAt: number;
+  scope: 'admin' | 'monitor' | 'node-sync';
+  expiresAt: number;
 }
 
 interface SecurityTabProps {
   allSetting: AllSetting;
   updateSetting: (patch: Partial<AllSetting>) => void;
+  saveSetting: (payload: Partial<AllSetting> & Record<string, unknown>) => Promise<unknown>;
+}
+
+const UNIX_MILLISECONDS_THRESHOLD = 100_000_000_000;
+
+function apiTokenCreatedAtMilliseconds(createdAt: number): number {
+  return createdAt < UNIX_MILLISECONDS_THRESHOLD ? createdAt * 1000 : createdAt;
 }
 
 type TfaType = 'set' | 'confirm';
@@ -59,7 +57,7 @@ const TFA_INITIAL: TfaState = {
   onConfirm: () => {},
 };
 
-export default function SecurityTab({ allSetting, updateSetting }: SecurityTabProps) {
+export default function SecurityTab({ allSetting, updateSetting, saveSetting }: SecurityTabProps) {
   const { t } = useTranslation();
   const { isMobile } = useMediaQuery();
   const [modal, modalContextHolder] = Modal.useModal();
@@ -75,7 +73,7 @@ export default function SecurityTab({ allSetting, updateSetting }: SecurityTabPr
   const [updating, setUpdating] = useState(false);
 
   const [apiTokens, setApiTokens] = useState<ApiTokenRow[]>([]);
-  const [apiTokensLoading, setApiTokensLoading] = useState(false);
+  const [apiTokensLoading, setApiTokensLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState('');
   const [creating, setCreating] = useState(false);
@@ -85,56 +83,70 @@ export default function SecurityTab({ allSetting, updateSetting }: SecurityTabPr
     setTfa({ ...opts, open: true });
   }, []);
 
-  const onTfaConfirm = useCallback((success: boolean, code?: string) => {
-    tfa.onConfirm(success, code);
-  }, [tfa]);
+  const onTfaConfirm = useCallback(
+    (success: boolean, code?: string) => {
+      tfa.onConfirm(success, code);
+    },
+    [tfa],
+  );
 
   function updateUserField<K extends keyof typeof user>(key: K, value: string) {
     setUser((prev) => ({ ...prev, [key]: value }));
   }
 
-  const sendUpdateUser = useCallback(async () => {
-    setUpdating(true);
-    try {
-      const msg = await HttpUtil.post('/panel/api/setting/updateUser', user) as ApiMsg;
-      if (msg?.success) {
-        await HttpUtil.post('/logout');
-        const basePath = window.X_UI_BASE_PATH || '/';
-        window.location.replace(basePath);
+  const sendUpdateUser = useCallback(
+    async (twoFactorCode = '') => {
+      setUpdating(true);
+      try {
+        const msg = (await HttpUtil.post('/panel/api/setting/updateUser', {
+          ...user,
+          twoFactorCode,
+        })) as ApiMsg;
+        if (msg?.success) {
+          await HttpUtil.post('/logout');
+          const basePath = window.X_UI_BASE_PATH || '/';
+          window.location.replace(basePath);
+        }
+      } finally {
+        setUpdating(false);
       }
-    } finally {
-      setUpdating(false);
-    }
-  }, [user]);
+    },
+    [user],
+  );
 
   function onUpdateUserClick() {
     if (allSetting.twoFactorEnable) {
       openTfa({
         title: t('pages.settings.security.twoFactorModalChangeCredentialsTitle'),
         description: t('pages.settings.security.twoFactorModalChangeCredentialsStep'),
-        token: allSetting.twoFactorToken,
+        token: '',
         type: 'confirm',
-        onConfirm: (ok: boolean) => { if (ok) sendUpdateUser(); },
+        onConfirm: (ok: boolean, code?: string) => {
+          if (ok) sendUpdateUser(code || '');
+        },
       });
     } else {
       sendUpdateUser();
     }
   }
 
-  const loadApiTokens = useCallback(async () => {
-    setApiTokensLoading(true);
+  const fetchApiTokens = useCallback(async () => {
     try {
-      const msg = await HttpUtil.get('/panel/api/setting/apiTokens') as ApiMsg<ApiTokenRow[]>;
+      const msg = (await HttpUtil.get('/panel/api/setting/apiTokens')) as ApiMsg<ApiTokenRow[]>;
       if (msg?.success) setApiTokens(Array.isArray(msg.obj) ? msg.obj : []);
     } finally {
       setApiTokensLoading(false);
     }
   }, []);
 
+  const loadApiTokens = useCallback(async () => {
+    setApiTokensLoading(true);
+    await fetchApiTokens();
+  }, [fetchApiTokens]);
+
   useEffect(() => {
-     
-    loadApiTokens();
-  }, [loadApiTokens]);
+    void fetchApiTokens();
+  }, [fetchApiTokens]);
 
   async function copyToken(token: string) {
     if (!token) return;
@@ -156,7 +168,9 @@ export default function SecurityTab({ allSetting, updateSetting }: SecurityTabPr
     }
     setCreating(true);
     try {
-      const msg = await HttpUtil.post('/panel/api/setting/apiTokens/create', { name }) as ApiMsg<{ token?: string }>;
+      const msg = (await HttpUtil.post('/panel/api/setting/apiTokens/create', { name })) as ApiMsg<{
+        token?: string;
+      }>;
       if (msg?.success) {
         setCreateOpen(false);
         await loadApiTokens();
@@ -172,13 +186,16 @@ export default function SecurityTab({ allSetting, updateSetting }: SecurityTabPr
   function confirmDeleteToken(row: ApiTokenRow) {
     modal.confirm({
       title: `${t('delete')} "${row.name}"?`,
-      content: t('pages.settings.security.apiTokenDeleteWarning')
-        || 'Any caller using this token will stop authenticating immediately.',
+      content:
+        t('pages.settings.security.apiTokenDeleteWarning') ||
+        'Any caller using this token will stop authenticating immediately.',
       okText: t('delete'),
       cancelText: t('cancel'),
       okType: 'danger',
       onOk: async () => {
-        const msg = await HttpUtil.post(`/panel/api/setting/apiTokens/delete/${row.id}`) as ApiMsg;
+        const msg = (await HttpUtil.post(`/panel/api/setting/apiTokens/delete/${row.id}`, {
+          expectedScope: row.scope,
+        })) as ApiMsg;
         if (msg?.success) await loadApiTokens();
       },
     });
@@ -186,7 +203,10 @@ export default function SecurityTab({ allSetting, updateSetting }: SecurityTabPr
 
   async function toggleTokenEnabled(row: ApiTokenRow) {
     const target = !row.enabled;
-    const msg = await HttpUtil.post(`/panel/api/setting/apiTokens/setEnabled/${row.id}`, { enabled: target }) as ApiMsg;
+    const msg = (await HttpUtil.post(`/panel/api/setting/apiTokens/setEnabled/${row.id}`, {
+      enabled: target,
+      expectedScope: row.scope,
+    })) as ApiMsg;
     if (msg?.success) {
       setApiTokens((prev) => prev.map((r) => (r.id === row.id ? { ...r, enabled: target } : r)));
     }
@@ -194,7 +214,7 @@ export default function SecurityTab({ allSetting, updateSetting }: SecurityTabPr
 
   function formatTokenDate(ts: number): string {
     if (!ts) return '';
-    return new Date(ts * 1000).toLocaleString();
+    return IntlUtil.formatDate(apiTokenCreatedAtMilliseconds(ts));
   }
 
   function toggleTwoFactor() {
@@ -218,12 +238,21 @@ export default function SecurityTab({ allSetting, updateSetting }: SecurityTabPr
       openTfa({
         title: t('pages.settings.security.twoFactorModalDeleteTitle'),
         description: t('pages.settings.security.twoFactorModalRemoveStep'),
-        token: allSetting.twoFactorToken,
+        token: '',
         type: 'confirm',
-        onConfirm: (ok: boolean) => {
+        onConfirm: async (ok: boolean, code?: string) => {
           if (!ok) return;
-          messageApi.success(t('pages.settings.security.twoFactorModalDeleteSuccess'));
-          updateSetting({ twoFactorEnable: false, twoFactorToken: '' });
+          const next = {
+            ...allSetting,
+            twoFactorEnable: false,
+            twoFactorToken: '',
+            twoFactorCode: code || '',
+          };
+          const msg = (await saveSetting(next)) as ApiMsg;
+          if (msg?.success) {
+            messageApi.success(t('pages.settings.security.twoFactorModalDeleteSuccess'));
+            updateSetting({ twoFactorEnable: false, twoFactorToken: '', hasTwoFactorToken: false });
+          }
         },
       });
     }
@@ -233,87 +262,118 @@ export default function SecurityTab({ allSetting, updateSetting }: SecurityTabPr
     <>
       {messageContextHolder}
       {modalContextHolder}
-      <Tabs defaultActiveKey="1" items={[
-        {
-          key: '1',
-          label: catTabLabel(<UserOutlined />, t('pages.settings.security.admin'), isMobile),
-          children: (
-            <>
-              <SettingListItem paddings="small" title={t('pages.settings.oldUsername')}>
-                <Input value={user.oldUsername} autoComplete="username"
-                  onChange={(e) => updateUserField('oldUsername', e.target.value)} />
+      <Tabs
+        defaultActiveKey="1"
+        items={[
+          {
+            key: '1',
+            label: catTabLabel(<UserOutlined />, t('pages.settings.security.admin'), isMobile),
+            children: (
+              <>
+                <SettingListItem paddings="small" title={t('pages.settings.oldUsername')}>
+                  <Input
+                    value={user.oldUsername}
+                    autoComplete="username"
+                    onChange={(e) => updateUserField('oldUsername', e.target.value)}
+                  />
+                </SettingListItem>
+                <SettingListItem paddings="small" title={t('pages.settings.currentPassword')}>
+                  <Input.Password
+                    value={user.oldPassword}
+                    autoComplete="current-password"
+                    onChange={(e) => updateUserField('oldPassword', e.target.value)}
+                  />
+                </SettingListItem>
+                <SettingListItem paddings="small" title={t('pages.settings.newUsername')}>
+                  <Input
+                    value={user.newUsername}
+                    onChange={(e) => updateUserField('newUsername', e.target.value)}
+                  />
+                </SettingListItem>
+                <SettingListItem paddings="small" title={t('pages.settings.newPassword')}>
+                  <Input.Password
+                    value={user.newPassword}
+                    autoComplete="new-password"
+                    onChange={(e) => updateUserField('newPassword', e.target.value)}
+                  />
+                </SettingListItem>
+                <div className="security-actions">
+                  <Space style={{ padding: '0 20px' }}>
+                    <Button type="primary" loading={updating} onClick={onUpdateUserClick}>
+                      {t('confirm')}
+                    </Button>
+                  </Space>
+                </div>
+              </>
+            ),
+          },
+          {
+            key: '2',
+            label: catTabLabel(
+              <SafetyOutlined />,
+              t('pages.settings.security.twoFactor'),
+              isMobile,
+            ),
+            children: (
+              <SettingListItem
+                paddings="small"
+                title={t('pages.settings.security.twoFactorEnable')}
+                description={t('pages.settings.security.twoFactorEnableDesc')}
+              >
+                <Switch checked={allSetting.twoFactorEnable} onClick={toggleTwoFactor} />
               </SettingListItem>
-              <SettingListItem paddings="small" title={t('pages.settings.currentPassword')}>
-                <Input.Password value={user.oldPassword} autoComplete="current-password"
-                  onChange={(e) => updateUserField('oldPassword', e.target.value)} />
-              </SettingListItem>
-              <SettingListItem paddings="small" title={t('pages.settings.newUsername')}>
-                <Input value={user.newUsername}
-                  onChange={(e) => updateUserField('newUsername', e.target.value)} />
-              </SettingListItem>
-              <SettingListItem paddings="small" title={t('pages.settings.newPassword')}>
-                <Input.Password value={user.newPassword} autoComplete="new-password"
-                  onChange={(e) => updateUserField('newPassword', e.target.value)} />
-              </SettingListItem>
-              <div className="security-actions">
-                <Space style={{ padding: '0 20px' }}>
-                  <Button type="primary" loading={updating} onClick={onUpdateUserClick}>
-                    {t('confirm')}
+            ),
+          },
+          {
+            key: '3',
+            label: catTabLabel(<ApiOutlined />, t('pages.nodes.apiToken'), isMobile),
+            children: (
+              <div className="api-token-section">
+                <div className="api-token-header">
+                  <p className="api-token-hint">{t('pages.nodes.apiTokenHint')}</p>
+                  <Button type="primary" size="small" onClick={openCreateModal}>
+                    + {t('pages.settings.security.apiTokenNew') || 'New token'}
                   </Button>
-                </Space>
-              </div>
-            </>
-          ),
-        },
-        {
-          key: '2',
-          label: catTabLabel(<SafetyOutlined />, t('pages.settings.security.twoFactor'), isMobile),
-          children: (
-            <SettingListItem
-              paddings="small"
-              title={t('pages.settings.security.twoFactorEnable')}
-              description={t('pages.settings.security.twoFactorEnableDesc')}
-            >
-              <Switch checked={allSetting.twoFactorEnable} onClick={toggleTwoFactor} />
-            </SettingListItem>
-          ),
-        },
-        {
-          key: '3',
-          label: catTabLabel(<ApiOutlined />, t('pages.nodes.apiToken'), isMobile),
-          children: (
-            <div className="api-token-section">
-              <div className="api-token-header">
-                <p className="api-token-hint">{t('pages.nodes.apiTokenHint')}</p>
-                <Button type="primary" size="small" onClick={openCreateModal}>
-                  + {t('pages.settings.security.apiTokenNew') || 'New token'}
-                </Button>
-              </div>
-              <Spin spinning={apiTokensLoading}>
-                {!apiTokens.length && !apiTokensLoading && (
-                  <Empty description={t('pages.settings.security.apiTokenEmpty') || 'No tokens yet'} />
-                )}
-                {apiTokens.map((row) => (
-                  <div key={row.id} className={`api-token-row${row.enabled ? '' : ' disabled'}`}>
-                    <div className="api-token-row-head">
-                      <div className="api-token-name-wrap">
-                        <span className="api-token-name">{row.name}</span>
-                        <span className="api-token-created">{formatTokenDate(row.createdAt)}</span>
-                      </div>
-                      <div className="api-token-actions">
-                        <Switch size="small" checked={row.enabled} onChange={() => toggleTokenEnabled(row)} />
-                        <Button size="small" danger type="text" onClick={() => confirmDeleteToken(row)}>
-                          {t('delete')}
-                        </Button>
+                </div>
+                <Spin spinning={apiTokensLoading}>
+                  {!apiTokens.length && !apiTokensLoading && (
+                    <Empty
+                      description={t('pages.settings.security.apiTokenEmpty') || 'No tokens yet'}
+                    />
+                  )}
+                  {apiTokens.map((row) => (
+                    <div key={row.id} className={`api-token-row${row.enabled ? '' : ' disabled'}`}>
+                      <div className="api-token-row-head">
+                        <div className="api-token-name-wrap">
+                          <span className="api-token-name">{row.name}</span>
+                          <span className="api-token-created">
+                            {formatTokenDate(row.createdAt)}
+                          </span>
+                        </div>
+                        <div className="api-token-actions">
+                          <Switch
+                            size="small"
+                            checked={row.enabled}
+                            onChange={() => toggleTokenEnabled(row)}
+                          />
+                          <Button
+                            size="small"
+                            danger
+                            type="text"
+                            onClick={() => confirmDeleteToken(row)}
+                          >
+                            {t('delete')}
+                          </Button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
-              </Spin>
-            </div>
-          ),
-        },
-      ]} />
+                  ))}
+                </Spin>
+              </div>
+            ),
+          },
+        ]}
+      />
 
       <Modal
         open={createOpen}
@@ -329,7 +389,9 @@ export default function SecurityTab({ allSetting, updateSetting }: SecurityTabPr
             <Input
               value={createName}
               maxLength={64}
-              placeholder={t('pages.settings.security.apiTokenNamePlaceholder') || 'e.g. central-panel-a'}
+              placeholder={
+                t('pages.settings.security.apiTokenNamePlaceholder') || 'e.g. central-panel-a'
+              }
               onChange={(e) => setCreateName(e.target.value)}
               onPressEnter={confirmCreateToken}
             />
@@ -346,12 +408,16 @@ export default function SecurityTab({ allSetting, updateSetting }: SecurityTabPr
         cancelButtonProps={{ style: { display: 'none' } }}
       >
         <p className="api-token-created-notice">
-          {t('pages.settings.security.apiTokenCreatedNotice')
-            || 'Copy this token now. For security it is not stored in readable form and will not be shown again.'}
+          {t('pages.settings.security.apiTokenCreatedNotice') ||
+            'Copy this token now. For security it is not stored in readable form and will not be shown again.'}
         </p>
         <div className="api-token-value-wrap">
           <code className="api-token-value">{createdToken?.token}</code>
-          <Button size="small" type="primary" onClick={() => createdToken && copyToken(createdToken.token)}>
+          <Button
+            size="small"
+            type="primary"
+            onClick={() => createdToken && copyToken(createdToken.token)}
+          >
             {t('copy')}
           </Button>
         </div>

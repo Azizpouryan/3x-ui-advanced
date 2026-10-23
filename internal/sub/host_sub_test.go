@@ -2,6 +2,7 @@ package sub
 
 import (
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -270,6 +271,61 @@ func TestSub_HostAllowInsecure(t *testing.T) {
 	}
 }
 
+// A host's Host header and path reach the Clash and JSON renderers even when
+// the inbound's own ws settings leave them empty (#5944).
+func TestSub_HostHeaderReachesClashAndJson(t *testing.T) {
+	seedSubDB(t)
+	ib := seedSubInbound(t, "s1", "hh", 4457, 1,
+		`{"network":"ws","security":"tls","wsSettings":{"path":"/"},"tlsSettings":{"serverName":"base.sni"}}`)
+	seedHost(t, &model.Host{
+		InboundId: ib.Id, SortOrder: 0, Remark: "HH", Address: "hh.cdn.com", Port: 8443, Security: "tls",
+		HostHeader: "cdn.example.com", Path: "/ws-path",
+	})
+
+	clash := NewSubClashService(false, "", NewSubService(""))
+	yaml, _, err := clash.GetClash("s1", "req.example.com")
+	if err != nil {
+		t.Fatalf("GetClash: %v", err)
+	}
+	if !strings.Contains(yaml, "Host: cdn.example.com") {
+		t.Fatalf("clash ws-opts should carry the host record's Host header:\n%s", yaml)
+	}
+	if !strings.Contains(yaml, "path: /ws-path") {
+		t.Fatalf("clash ws-opts should carry the host record's path:\n%s", yaml)
+	}
+
+	js := NewSubJsonService("", "", "", "", NewSubService(""))
+	out, _, err := js.GetJson("s1", "req.example.com", false)
+	if err != nil {
+		t.Fatalf("GetJson: %v", err)
+	}
+	if !strings.Contains(out, `"host": "cdn.example.com"`) && !strings.Contains(out, `"host":"cdn.example.com"`) {
+		t.Fatalf("json wsSettings should carry the host record's Host header:\n%s", out)
+	}
+}
+
+// A host's Final Mask reaches the raw share link as the fm param, merged with
+// any inbound-level mask (#5831).
+func TestSub_HostFinalMask_RawLink(t *testing.T) {
+	seedSubDB(t)
+	ib := seedSubInbound(t, "s1", "fmh", 4455, 1,
+		`{"network":"tcp","security":"tls","tlsSettings":{"serverName":"base.sni"},"finalmask":{"tcp":[{"type":"sudoku"}]}}`)
+	seedHost(t, &model.Host{
+		InboundId: ib.Id, SortOrder: 0, Remark: "FM", Address: "fm.cdn.com", Port: 8443, Security: "tls",
+		FinalMask: `{"tcp":[{"type":"fragment"}]}`,
+	})
+
+	links, _, _, _, err := NewSubService("").GetSubs("s1", "req.example.com")
+	if err != nil {
+		t.Fatalf("GetSubs: %v", err)
+	}
+	joined := strings.Join(links, "\n")
+	wantFm := "fm=" + url.QueryEscape(`{"tcp":[{"type":"sudoku"},{"type":"fragment"}]}`)
+	if !strings.Contains(joined, wantFm) {
+		t.Fatalf("raw link should merge the host Final Mask into fm.\n got: %s\nwant substring: %s", joined, wantFm)
+	}
+}
+
 // A host's sockoptParams is injected into the JSON output stream (sockopt is
 // stripped from the base stream, re-added per host).
 func TestSub_HostSockoptJSON(t *testing.T) {
@@ -280,8 +336,8 @@ func TestSub_HostSockoptJSON(t *testing.T) {
 		InboundId: ib.Id, SortOrder: 0, Remark: "SO", Address: "so.cdn.com", Port: 8443, Security: "tls",
 		SockoptParams: `{"tcpFastOpen":true}`,
 	})
-	js := NewSubJsonService("", "", "", NewSubService(""))
-	out, _, err := js.GetJson("s1", "req.example.com")
+	js := NewSubJsonService("", "", "", "", NewSubService(""))
+	out, _, err := js.GetJson("s1", "req.example.com", false)
 	if err != nil {
 		t.Fatalf("GetJson: %v", err)
 	}
@@ -298,8 +354,8 @@ func TestSub_HostMuxJSON(t *testing.T) {
 		InboundId: ib.Id, SortOrder: 0, Remark: "MX", Address: "mx.cdn.com", Port: 8443, Security: "tls",
 		MuxParams: `{"enabled":true,"concurrency":8}`,
 	})
-	js := NewSubJsonService("", "", "", NewSubService(""))
-	out, _, err := js.GetJson("s1", "req.example.com")
+	js := NewSubJsonService("", "", "", "", NewSubService(""))
+	out, _, err := js.GetJson("s1", "req.example.com", false)
 	if err != nil {
 		t.Fatalf("GetJson: %v", err)
 	}
@@ -360,5 +416,29 @@ func TestSub_ExcludeFromSubTypes(t *testing.T) {
 	}
 	if strings.Contains(yaml, "clashless.cdn.com") {
 		t.Fatalf("host excluded from clash must not appear in GetClash:\n%s", yaml)
+	}
+}
+
+// A host that forces plain TLS over a Reality inbound must not leave the
+// Reality identity behind: pbk/sid/spx and the Reality dest sni describe a
+// handshake the endpoint no longer performs.
+func TestSub_HostTlsOverRealityDropsRealityParams(t *testing.T) {
+	seedSubDB(t)
+	reality := `{"network":"tcp","security":"reality","realitySettings":{"serverNames":["master-dest.example.com"],"publicKey":"MASTERPBK","shortIds":["ab12"],"fingerprint":"chrome"}}`
+	ib := seedSubInbound(t, "s1", "reality-in", 4461, 1, reality)
+	seedHost(t, &model.Host{InboundId: ib.Id, SortOrder: 1, Remark: "H", Address: "edge.example.com", Port: 443, Security: "tls"})
+
+	links, _, _, _, err := NewSubService("").GetSubs("s1", "req.example.com")
+	if err != nil {
+		t.Fatalf("GetSubs: %v", err)
+	}
+	joined := strings.Join(links, "\n")
+	if !strings.Contains(joined, "security=tls") {
+		t.Fatalf("host forces tls, link must say so: %s", joined)
+	}
+	for _, leaked := range []string{"pbk=", "sid=", "spx=", "sni=master-dest.example.com"} {
+		if strings.Contains(joined, leaked) {
+			t.Fatalf("reality parameter %q survived a tls host override: %s", leaked, joined)
+		}
 	}
 }

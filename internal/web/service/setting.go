@@ -9,11 +9,15 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
+
+	"github.com/mhsanaei/3x-ui/v3/internal/config"
 	"github.com/mhsanaei/3x-ui/v3/internal/database"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
@@ -21,15 +25,31 @@ import (
 	"github.com/mhsanaei/3x-ui/v3/internal/util/netproxy"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/random"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/reflect_util"
+	"github.com/mhsanaei/3x-ui/v3/internal/util/totp"
 	"github.com/mhsanaei/3x-ui/v3/internal/web/entity"
-	"github.com/mhsanaei/3x-ui/v3/internal/web/locale"
 	"github.com/mhsanaei/3x-ui/v3/internal/xray"
-
-	"gorm.io/gorm"
+	"github.com/mhsanaei/3x-ui/v3/internal/xray/dnsconf"
 )
 
 //go:embed config.json
 var xrayTemplateConfig string
+
+const (
+	DefaultSubClashUserAgentRegex     = `(?i)(clash|mihomo)`
+	DefaultSubJsonUserAgentRegex      = ``
+	DefaultRemarkTemplate             = "{{INBOUND}}-{{EMAIL}}|📊{{TRAFFIC_LEFT}}|⏳{{DAYS_LEFT}}D"
+	DefaultSubExpiredTemplate         = "⛔ {{EMAIL}} | Expired: {{EXPIRE_DATE}}"
+	DefaultSubTrafficDepletedTemplate = "🚫 {{EMAIL}} | Traffic Depleted | {{TRAFFIC_USED}}/{{TRAFFIC_TOTAL}}"
+	DefaultTrustedProxyCIDRs          = "127.0.0.1/32,::1/128"
+	maxRegexLength                    = 2048
+)
+
+// Built-in profile links expose the subscription URL and require an explicit opt-in.
+const (
+	SubProfileModeNone    = "none"
+	SubProfileModeBuiltin = "builtin"
+	SubProfileModeCustom  = "custom"
+)
 
 var defaultValueMap = map[string]string{
 	"xrayTemplateConfig": xrayTemplateConfig,
@@ -49,14 +69,22 @@ var defaultValueMap = map[string]string{
 	"nodeMtlsCaKeyPem":            "",
 	"nodeMtlsClientCertPem":       "",
 	"nodeMtlsClientKeyPem":        "",
+	"nodeMtlsClientCertSha256":    "",
 	"nodeMtlsClientCAPem":         "",
 	"webBasePath":                 normalizeBasePath(getEnv("XUI_INIT_WEB_BASE_PATH", "/")),
 	"sessionMaxAge":               "360",
-	"trustedProxyCIDRs":           "127.0.0.1/32,::1/128",
+	"trustedProxyCIDRs":           DefaultTrustedProxyCIDRs,
+	"realityScanCandidates":       DefaultRealityScanCandidatesCSV,
+	"ipLimitAllowlist":            "",
 	"pageSize":                    "25",
 	"expireDiff":                  "0",
 	"trafficDiff":                 "0",
-	"remarkTemplate":              "{{EMAIL}}|{{INBOUND}}|📊{{TRAFFIC_LEFT}}|⏳{{DAYS_LEFT}}D",
+	"remarkTemplate":              DefaultRemarkTemplate,
+	"subShowIdentityOnAllLinks":   "false",
+	"subInfoNodeEnable":           "false",
+	"subCalendarExpireInclusive":  "false",
+	"subExpiredTemplate":          DefaultSubExpiredTemplate,
+	"subTrafficDepletedTemplate":  DefaultSubTrafficDepletedTemplate,
 	"timeLocation":                "Local",
 	"tgBotEnable":                 "false",
 	"tgBotToken":                  "",
@@ -70,15 +98,47 @@ var defaultValueMap = map[string]string{
 	"tgLang":                      "en-US",
 	"twoFactorEnable":             "false",
 	"twoFactorToken":              "",
+	"happLinkEnable":              "false",
 	"subEnable":                   "true",
 	"subJsonEnable":               "false",
+	"subJsonAutoDetect":           "false",
+	"subJsonAlwaysArray":          "false",
+	"subJsonUserAgentRegex":       "",
+	"subClashAutoDetect":          "false",
+	"subClashUserAgentRegex":      "",
 	"subTitle":                    "",
 	"subSupportUrl":               "",
+	"subProfileMode":              SubProfileModeNone,
 	"subProfileUrl":               "",
 	"subAnnounce":                 "",
 	"subEnableRouting":            "false",
 	"subRoutingRules":             "",
 	"subHideSettings":             "false",
+	"subHappAutoDetect":           "false",
+	"subHappProviderId":           "",
+	"subHappNewUrl":               "",
+	"subHappFallbackUrl":          "",
+	"subHappSubInfoColor":         "blue",
+	"subHappSubInfoText":          "",
+	"subHappSubInfoButtonText":    "",
+	"subHappSubInfoButtonLink":    "",
+	"subHappSubExpire":            "false",
+	"subHappSubExpireButtonLink":  "",
+	"subHappNotificationExpire":   "false",
+	"subHappNoLimit":              "false",
+	"subHappAlwaysHwid":           "false",
+	"subHappTunMode":              "",
+	"subHappTunType":              "",
+	"subHappExcludeRoutes":        "",
+	"subHappExcludeApns":          "false",
+	"subHappColorProfile":         "",
+	"subHappPingType":             "",
+	"subHappAutoConnect":          "false",
+	"subHappAutoConnectType":      "lowestdelay",
+	"subHappPerAppMode":           "off",
+	"subHappPerAppList":           "",
+	"subIncyEnableRouting":        "false",
+	"subIncyRoutingRules":         "",
 	"subListen":                   "",
 	"subPort":                     "2096",
 	"subPath":                     "/sub/",
@@ -97,79 +157,45 @@ var defaultValueMap = map[string]string{
 	"subClashRules":               "",
 	"subJsonMux":                  "",
 	"subJsonRules":                "",
+	"subJsonRoutingRules":         "",
+	"subJsonDns":                  "",
 	"subJsonFinalMask":            "",
+	"subJsonObservatory":          "",
 	"subThemeDir":                 "",
-	"subBrandingEnable":           "false",
-	"subBranding":                 "",
 	"datepicker":                  "gregorian",
 	"warp":                        "",
 	"warpUpdateInterval":          "0",
 	"nord":                        "",
+	"pia":                         "",
 	"externalTrafficInformEnable": "false",
 	"externalTrafficInformURI":    "",
 	"restartXrayOnClientDisable":  "true",
 	"xrayOutboundTestUrl":         "https://www.google.com/generate_204",
 	"panelOutbound":               "",
+	"devChannelEnable":            "false",
 
 	// LDAP defaults
-	"clientActivityEnable":  "false",
-	"ldapEnable":            "false",
-	"ldapHost":              "",
-	"ldapPort":              "389",
-	"ldapUseTLS":            "false",
-	"ldapBindDN":            "",
-	"ldapPassword":          "",
-	"ldapBaseDN":            "",
-	"ldapUserFilter":        "(objectClass=person)",
-	"ldapUserAttr":          "mail",
-	"ldapVlessField":        "vless_enabled",
-	"ldapSyncCron":          "@every 1m",
-	"ldapFlagField":         "",
-	"ldapTruthyValues":      "true,1,yes,on",
-	"ldapInvertFlag":        "false",
-	"ldapInboundTags":       "",
-	"ldapAutoCreate":        "false",
-	"ldapAutoDelete":        "false",
-	"ldapDefaultTotalGB":    "0",
-	"ldapDefaultExpiryDays": "0",
-	"ldapDefaultLimitIP":    "0",
-
-	// Device (HWID) limit
-	"hwidEnable":         "false",
-	"hwidForced":         "false",
-	"hwidGuardManualSub": "false",
-	"hwidDefaultLimit":   "0",
-
-	// Auto-delete of long-expired clients (0 days = never)
-	"autoDeleteExpiredEnable": "false",
-	"autoDeleteExpiredDays":   "0",
-
-	// Reseller sales bot — a second Telegram bot, separate from the
-	// notification bot above, that sells reseller accounts.
-	"salesBotEnable":   "false",
-	"salesBotToken":    "",
-	"salesBotAdmins":   "",
-	"salesBotWelcome":  "",
-	"salesBotPayText":  "",
-	"salesBotSupport":  "",
-	"salesBotCurrency": "تومان",
-	"salesBotLang":     "fa-IR",
-
-	// Telegram shop — wallet-funded, pay-as-you-go config sales.
-	"shopPricePerGB":  "0",
-	"shopPricePerDay": "0",
-	"shopInboundId":   "0",
-	"shopMinTopUp":    "0",
-	"shopMaxTopUp":    "0",
-	"shopMinBalance":  "0",
-	"shopMaxVolumeGB": "0",
-	"shopJoinChannel": "",
-	"shopConfigDays":  "0",
-	// How often, in minutes, the billing run meters every config.
-	"shopBillingInterval": "2",
-	// Days a config may stay dead (out of traffic, or wallet empty) before the
-	// shop deletes it. 0 = never delete.
-	"shopDeleteDeadDays": "0",
+	"ldapEnable":             "false",
+	"ldapHost":               "",
+	"ldapPort":               "389",
+	"ldapUseTLS":             "false",
+	"ldapInsecureSkipVerify": "false",
+	"ldapBindDN":             "",
+	"ldapPassword":           "",
+	"ldapBaseDN":             "",
+	"ldapUserFilter":         "(objectClass=person)",
+	"ldapUserAttr":           "mail",
+	"ldapVlessField":         "vless_enabled",
+	"ldapSyncCron":           "@every 1m",
+	"ldapFlagField":          "",
+	"ldapTruthyValues":       "true,1,yes,on",
+	"ldapInvertFlag":         "false",
+	"ldapInboundTags":        "",
+	"ldapAutoCreate":         "false",
+	"ldapAutoDelete":         "false",
+	"ldapDefaultTotalGB":     "0",
+	"ldapDefaultExpiryDays":  "0",
+	"ldapDefaultLimitIP":     "0",
 
 	// Event bus — per-subscriber event filtering (empty = all disabled)
 	"tgEnabledEvents":   "login.attempt,cpu.high",
@@ -177,28 +203,36 @@ var defaultValueMap = map[string]string{
 	"smtpCpu":           "80",
 	"smtpMemory":        "80",
 
+	// Consecutive failed observatory probes before an outbound.down event fires
+	"outboundDownThreshold": "3",
+
 	// Email (SMTP) notifications
 	"smtpEnable":         "false",
 	"smtpHost":           "",
 	"smtpPort":           "587",
 	"smtpUsername":       "",
 	"smtpPassword":       "",
+	"smtpFrom":           "",
+	"smtpFromName":       "",
 	"smtpTo":             "",
 	"smtpEncryptionType": "starttls", // no, starttls, tls
+
+	// Discord bot notifications
+	"discordBotEnable":     "false",
+	"discordBotToken":      "",
+	"discordChannelId":     "",
+	"discordAdminIds":      "",
+	"discordRunTime":       "@daily",
+	"discordBotBackup":     "false",
+	"discordCpu":           "80",
+	"discordMemory":        "80",
+	"discordLang":          "en-US",
+	"discordEnabledEvents": "login.attempt,cpu.high",
 }
 
 // SettingService provides business logic for application settings management.
 // It handles configuration storage, retrieval, and validation for all system settings.
 type SettingService struct{}
-
-func (s *SettingService) GetDefaultJSONConfig() (any, error) {
-	var jsonData any
-	err := json.Unmarshal([]byte(xrayTemplateConfig), &jsonData)
-	if err != nil {
-		return nil, err
-	}
-	return jsonData, nil
-}
 
 func (s *SettingService) GetAllSetting() (*entity.AllSetting, error) {
 	db := database.GetDB()
@@ -237,9 +271,7 @@ func (s *SettingService) GetAllSetting() (*entity.AllSetting, error) {
 
 		fieldV := v.FieldByName(field.Name)
 		switch t := fieldV.Interface().(type) {
-		// int and int64 read the same way; money and byte counts are int64 so
-		// they cannot overflow on a 32-bit build.
-		case int, int64:
+		case int:
 			n, err := strconv.ParseInt(effectiveSettingValue(key, value), 10, 64)
 			if err != nil {
 				return err
@@ -274,6 +306,11 @@ func (s *SettingService) GetAllSetting() (*entity.AllSetting, error) {
 		}
 	}
 
+	// A missing mode must still preserve URLs configured before modes existed.
+	if !keyMap["subProfileMode"] {
+		allSetting.SubProfileMode = ""
+	}
+	allSetting.SubProfileMode = effectiveSubProfileMode(allSetting.SubProfileMode, allSetting.SubProfileUrl)
 	return allSetting, nil
 }
 
@@ -289,7 +326,7 @@ func (s *SettingService) GetAllSettingView() (*entity.AllSettingView, error) {
 	view.HasWarpSecret = secretConfigured(mustString(s.GetWarp()))
 	view.HasNordSecret = secretConfigured(mustString(s.GetNord()))
 	view.HasSmtpPassword = secretConfigured(allSetting.SmtpPassword)
-	view.HasSalesBotToken = secretConfigured(allSetting.SalesBotToken)
+	view.HasDiscordBotToken = secretConfigured(allSetting.DiscordBotToken)
 	var apiTokenCount int64
 	if err := database.GetDB().Model(model.ApiToken{}).Where("enabled = ?", true).Count(&apiTokenCount).Error; err == nil {
 		view.HasApiToken = apiTokenCount > 0
@@ -298,7 +335,7 @@ func (s *SettingService) GetAllSettingView() (*entity.AllSettingView, error) {
 	view.TwoFactorToken = ""
 	view.LdapPassword = ""
 	view.SmtpPassword = ""
-	view.SalesBotToken = ""
+	view.DiscordBotToken = ""
 	return view, nil
 }
 
@@ -324,12 +361,17 @@ func getEnv(key, fallback string) string {
 
 func (s *SettingService) ResetSettings() error {
 	db := database.GetDB()
-	err := db.Where("1 = 1").Delete(model.Setting{}).Error
-	if err != nil {
-		return err
-	}
-	return db.Model(model.User{}).
-		Where("1 = 1").Error
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("1 = 1").Delete(model.Setting{}).Error; err != nil {
+			return err
+		}
+		paths := []model.Setting{
+			{Key: "subPath", Value: "/" + random.NumLower(16) + "/"},
+			{Key: "subJsonPath", Value: "/" + random.NumLower(16) + "/"},
+			{Key: "subClashPath", Value: "/" + random.NumLower(16) + "/"},
+		}
+		return tx.Create(&paths).Error
+	})
 }
 
 func (s *SettingService) getSetting(key string) (*model.Setting, error) {
@@ -410,11 +452,17 @@ func (s *SettingService) setInt(key string, value int) error {
 }
 
 func (s *SettingService) GetWarpLastUpdate() (int64, error) {
-	val, err := s.getString("warpLastUpdate")
-	if err != nil || val == "" {
+	setting, err := s.getSetting("warpLastUpdate")
+	if database.IsNotFound(err) {
+		return 0, nil
+	}
+	if err != nil {
 		return 0, err
 	}
-	return strconv.ParseInt(val, 10, 64)
+	if setting.Value == "" {
+		return 0, nil
+	}
+	return strconv.ParseInt(setting.Value, 10, 64)
 }
 
 func (s *SettingService) SetWarpLastUpdate(val int64) error {
@@ -608,6 +656,24 @@ func (s *SettingService) SetTwoFactorToken(value string) error {
 	return s.setString("twoFactorToken", value)
 }
 
+func (s *SettingService) VerifyTwoFactorCode(code string) error {
+	enabled, err := s.GetTwoFactorEnable()
+	if err != nil {
+		return err
+	}
+	if !enabled {
+		return nil
+	}
+	token, err := s.GetTwoFactorToken()
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(token) == "" || !totp.VerifyWithSkew(token, strings.TrimSpace(code), time.Now()) {
+		return common.NewError("invalid two factor code")
+	}
+	return nil
+}
+
 func (s *SettingService) GetPort() (int, error) {
 	return s.getInt("webPort")
 }
@@ -644,20 +710,53 @@ func (s *SettingService) GetSessionMaxAge() (int, error) {
 	return s.getInt("sessionMaxAge")
 }
 
+// GetIpLimitAllowlist returns the operator's trusted addresses and networks,
+// which the IP limit neither counts nor bans.
+func (s *SettingService) GetIpLimitAllowlist() (string, error) {
+	return s.getString("ipLimitAllowlist")
+}
+
 func (s *SettingService) GetTrustedProxyCIDRs() (string, error) {
 	return s.getString("trustedProxyCIDRs")
+}
+
+func (s *SettingService) GetRealityScanCandidates() (string, error) {
+	return s.getString("realityScanCandidates")
 }
 
 func (s *SettingService) GetRemarkTemplate() (string, error) {
 	return s.getString("remarkTemplate")
 }
 
+func (s *SettingService) GetSubShowIdentityOnAllLinks() (bool, error) {
+	return s.getBool("subShowIdentityOnAllLinks")
+}
+
+func (s *SettingService) GetSubInfoNodeEnable() (bool, error) {
+	return s.getBool("subInfoNodeEnable")
+}
+
+func (s *SettingService) GetSubCalendarExpireInclusive() (bool, error) {
+	return s.getBool("subCalendarExpireInclusive")
+}
+
+func (s *SettingService) GetSubExpiredTemplate() (string, error) {
+	return s.getString("subExpiredTemplate")
+}
+
+func (s *SettingService) GetSubTrafficDepletedTemplate() (string, error) {
+	return s.getString("subTrafficDepletedTemplate")
+}
+
 func (s *SettingService) GetSecret() ([]byte, error) {
 	secret, err := s.getString("secret")
-	if secret == defaultValueMap["secret"] {
-		err := s.saveSetting("secret", secret)
-		if err != nil {
-			logger.Warning("save secret failed:", err)
+	if secret == "" || secret == defaultValueMap["secret"] {
+		if secret == "" {
+			secret = defaultValueMap["secret"]
+		}
+		saveErr := s.saveSetting("secret", secret)
+		if saveErr != nil {
+			logger.Warning("save secret failed:", saveErr)
 		}
 	}
 	return []byte(secret), err
@@ -722,20 +821,32 @@ func (s *SettingService) GetSubEnable() (bool, error) {
 	return s.getBool("subEnable")
 }
 
-// GetSubBrandingEnable reports whether the panel-authored branding is applied
-// to the subscription page.
-func (s *SettingService) GetSubBrandingEnable() (bool, error) {
-	return s.getBool("subBrandingEnable")
-}
-
-// GetSubBranding returns the raw branding document (JSON as authored by the
-// editor). Empty means "never configured".
-func (s *SettingService) GetSubBranding() (string, error) {
-	return s.getString("subBranding")
+func (s *SettingService) GetHappLinkEnable() (bool, error) {
+	return s.getBool("happLinkEnable")
 }
 
 func (s *SettingService) GetSubJsonEnable() (bool, error) {
 	return s.getBool("subJsonEnable")
+}
+
+func (s *SettingService) GetSubJsonAutoDetect() (bool, error) {
+	return s.getBool("subJsonAutoDetect")
+}
+
+func (s *SettingService) GetSubJsonAlwaysArray() (bool, error) {
+	return s.getBool("subJsonAlwaysArray")
+}
+
+func (s *SettingService) GetSubJsonUserAgentRegex() (string, error) {
+	return s.getString("subJsonUserAgentRegex")
+}
+
+func (s *SettingService) GetSubClashAutoDetect() (bool, error) {
+	return s.getBool("subClashAutoDetect")
+}
+
+func (s *SettingService) GetSubClashUserAgentRegex() (string, error) {
+	return s.getString("subClashUserAgentRegex")
 }
 
 func (s *SettingService) GetSubTitle() (string, error) {
@@ -743,11 +854,41 @@ func (s *SettingService) GetSubTitle() (string, error) {
 }
 
 func (s *SettingService) GetSubSupportUrl() (string, error) {
-	return s.getString("subSupportUrl")
+	value, err := s.getString("subSupportUrl")
+	return common.EnsureURLScheme(value), err
 }
 
 func (s *SettingService) GetSubProfileUrl() (string, error) {
-	return s.getString("subProfileUrl")
+	value, err := s.getString("subProfileUrl")
+	return common.EnsureURLScheme(value), err
+}
+
+func (s *SettingService) GetSubProfileMode() (string, error) {
+	setting, err := s.getSetting("subProfileMode")
+	if err != nil && !database.IsNotFound(err) {
+		return SubProfileModeNone, err
+	}
+	if err == nil && setting.Value != "" {
+		return effectiveSubProfileMode(setting.Value, ""), nil
+	}
+	profileURL, err := s.getString("subProfileUrl")
+	if err != nil {
+		return SubProfileModeNone, err
+	}
+	return effectiveSubProfileMode("", profileURL), nil
+}
+
+func effectiveSubProfileMode(mode, profileURL string) string {
+	switch mode {
+	case SubProfileModeNone, SubProfileModeBuiltin, SubProfileModeCustom:
+		return mode
+	case "":
+		// Older settings have no mode; only an existing custom URL opts them in.
+		if strings.TrimSpace(profileURL) != "" {
+			return SubProfileModeCustom
+		}
+	}
+	return SubProfileModeNone
 }
 
 func (s *SettingService) GetSubAnnounce() (string, error) {
@@ -764,6 +905,106 @@ func (s *SettingService) GetSubRoutingRules() (string, error) {
 
 func (s *SettingService) GetSubHideSettings() (bool, error) {
 	return s.getBool("subHideSettings")
+}
+
+func (s *SettingService) GetSubHappAutoDetect() (bool, error) {
+	return s.getBool("subHappAutoDetect")
+}
+
+func (s *SettingService) GetSubHappProviderId() (string, error) {
+	return s.getString("subHappProviderId")
+}
+
+func (s *SettingService) GetSubHappNewUrl() (string, error) {
+	return s.getString("subHappNewUrl")
+}
+
+func (s *SettingService) GetSubHappFallbackUrl() (string, error) {
+	return s.getString("subHappFallbackUrl")
+}
+
+func (s *SettingService) GetSubHappSubInfoColor() (string, error) {
+	return s.getString("subHappSubInfoColor")
+}
+
+func (s *SettingService) GetSubHappSubInfoText() (string, error) {
+	return s.getString("subHappSubInfoText")
+}
+
+func (s *SettingService) GetSubHappSubInfoButtonText() (string, error) {
+	return s.getString("subHappSubInfoButtonText")
+}
+
+func (s *SettingService) GetSubHappSubInfoButtonLink() (string, error) {
+	return s.getString("subHappSubInfoButtonLink")
+}
+
+func (s *SettingService) GetSubHappSubExpire() (bool, error) {
+	return s.getBool("subHappSubExpire")
+}
+
+func (s *SettingService) GetSubHappSubExpireButtonLink() (string, error) {
+	return s.getString("subHappSubExpireButtonLink")
+}
+
+func (s *SettingService) GetSubHappNotificationExpire() (bool, error) {
+	return s.getBool("subHappNotificationExpire")
+}
+
+func (s *SettingService) GetSubHappNoLimit() (bool, error) {
+	return s.getBool("subHappNoLimit")
+}
+
+func (s *SettingService) GetSubHappAlwaysHwid() (bool, error) {
+	return s.getBool("subHappAlwaysHwid")
+}
+
+func (s *SettingService) GetSubHappTunMode() (string, error) {
+	return s.getString("subHappTunMode")
+}
+
+func (s *SettingService) GetSubHappTunType() (string, error) {
+	return s.getString("subHappTunType")
+}
+
+func (s *SettingService) GetSubHappExcludeRoutes() (string, error) {
+	return s.getString("subHappExcludeRoutes")
+}
+
+func (s *SettingService) GetSubHappExcludeApns() (bool, error) {
+	return s.getBool("subHappExcludeApns")
+}
+
+func (s *SettingService) GetSubHappColorProfile() (string, error) {
+	return s.getString("subHappColorProfile")
+}
+
+func (s *SettingService) GetSubHappPingType() (string, error) {
+	return s.getString("subHappPingType")
+}
+
+func (s *SettingService) GetSubHappAutoConnect() (bool, error) {
+	return s.getBool("subHappAutoConnect")
+}
+
+func (s *SettingService) GetSubHappAutoConnectType() (string, error) {
+	return s.getString("subHappAutoConnectType")
+}
+
+func (s *SettingService) GetSubHappPerAppMode() (string, error) {
+	return s.getString("subHappPerAppMode")
+}
+
+func (s *SettingService) GetSubHappPerAppList() (string, error) {
+	return s.getString("subHappPerAppList")
+}
+
+func (s *SettingService) GetSubIncyEnableRouting() (bool, error) {
+	return s.getBool("subIncyEnableRouting")
+}
+
+func (s *SettingService) GetSubIncyRoutingRules() (string, error) {
+	return s.getString("subIncyRoutingRules")
 }
 
 func (s *SettingService) GetSubListen() (string, error) {
@@ -850,8 +1091,20 @@ func (s *SettingService) GetSubJsonRules() (string, error) {
 	return s.getString("subJsonRules")
 }
 
+func (s *SettingService) GetSubJsonRoutingRules() (string, error) {
+	return s.getString("subJsonRoutingRules")
+}
+
+func (s *SettingService) GetSubJsonDns() (string, error) {
+	return s.getString("subJsonDns")
+}
+
 func (s *SettingService) GetSubJsonFinalMask() (string, error) {
 	return s.getString("subJsonFinalMask")
+}
+
+func (s *SettingService) GetSubJsonObservatory() (string, error) {
+	return s.getString("subJsonObservatory")
 }
 
 func (s *SettingService) GetSubThemeDir() (string, error) {
@@ -878,6 +1131,14 @@ func (s *SettingService) SetNord(data string) error {
 	return s.setString("nord", data)
 }
 
+func (s *SettingService) GetPia() (string, error) {
+	return s.getString("pia")
+}
+
+func (s *SettingService) SetPia(data string) error {
+	return s.setString("pia", data)
+}
+
 func (s *SettingService) GetExternalTrafficInformEnable() (bool, error) {
 	return s.getBool("externalTrafficInformEnable")
 }
@@ -902,6 +1163,16 @@ func (s *SettingService) SetRestartXrayOnClientDisable(value bool) error {
 	return s.setBool("restartXrayOnClientDisable", value)
 }
 
+// GetDevChannelEnable reports whether the panel self-update tracks the rolling
+// per-commit dev release instead of the latest stable tag.
+func (s *SettingService) GetDevChannelEnable() (bool, error) {
+	return s.getBool("devChannelEnable")
+}
+
+func (s *SettingService) SetDevChannelEnable(value bool) error {
+	return s.setBool("devChannelEnable", value)
+}
+
 // GetIpLimitEnable reports whether the IP-limit feature is available. Always
 // true since the panel enforces limits via the core's online-stats API; on an
 // older core the job falls back to access-log parsing and warns there when the
@@ -921,20 +1192,6 @@ func (s *SettingService) GetAccessLogEnable() (bool, error) {
 	return (accessLogPath != "none" && accessLogPath != ""), nil
 }
 
-// GetClientActivityEnable reports whether per-client activity tracking is on.
-// When false the collection job is idle and the endpoints report disabled, so
-// nothing about a client's traffic is recorded. It is off by default and must
-// be turned on deliberately: it records the IPs, networks and destinations of
-// people using an anti-censorship proxy, which is exactly the data the tool
-// exists to keep from being gathered.
-func (s *SettingService) GetClientActivityEnable() (bool, error) {
-	return s.getBool("clientActivityEnable")
-}
-
-func (s *SettingService) SetClientActivityEnable(enable bool) error {
-	return s.setBool("clientActivityEnable", enable)
-}
-
 // GetLdapEnable returns whether LDAP is enabled.
 func (s *SettingService) GetLdapEnable() (bool, error) {
 	return s.getBool("ldapEnable")
@@ -950,6 +1207,10 @@ func (s *SettingService) GetLdapPort() (int, error) {
 
 func (s *SettingService) GetLdapUseTLS() (bool, error) {
 	return s.getBool("ldapUseTLS")
+}
+
+func (s *SettingService) GetLdapInsecureSkipVerify() (bool, error) {
+	return s.getBool("ldapInsecureSkipVerify")
 }
 
 func (s *SettingService) GetLdapBindDN() (string, error) {
@@ -1016,185 +1277,6 @@ func (s *SettingService) GetLdapDefaultLimitIP() (int, error) {
 	return s.getInt("ldapDefaultLimitIP")
 }
 
-// Device (HWID) limit
-
-func (s *SettingService) GetHwidEnable() (bool, error) {
-	return s.getBool("hwidEnable")
-}
-
-func (s *SettingService) GetHwidForced() (bool, error) {
-	return s.getBool("hwidForced")
-}
-
-func (s *SettingService) GetHwidGuardManualSub() (bool, error) {
-	return s.getBool("hwidGuardManualSub")
-}
-
-func (s *SettingService) GetHwidDefaultLimit() (int, error) {
-	return s.getInt("hwidDefaultLimit")
-}
-
-// Reseller sales bot
-
-func (s *SettingService) GetSalesBotEnable() (bool, error) {
-	return s.getBool("salesBotEnable")
-}
-
-func (s *SettingService) GetSalesBotToken() (string, error) {
-	return s.getString("salesBotToken")
-}
-
-func (s *SettingService) SetSalesBotToken(token string) error {
-	return s.setString("salesBotToken", token)
-}
-
-// GetSalesBotAdmins returns the Telegram user ids allowed to run the bot's
-// admin side, as a raw CSV.
-func (s *SettingService) GetSalesBotAdmins() (string, error) {
-	return s.getString("salesBotAdmins")
-}
-
-// GetSalesBotLang is the language the sales bot talks to buyers in. It is
-// independent of the notification bot's language and of the panel's: the shop's
-// audience is customers, not admins.
-func (s *SettingService) GetSalesBotLang() (string, error) {
-	lang, err := s.getString("salesBotLang")
-	if err != nil || !locale.IsSupportedLang(lang) {
-		return "fa-IR", err
-	}
-	return lang, nil
-}
-
-func (s *SettingService) GetSalesBotWelcome() (string, error) {
-	return s.getString("salesBotWelcome")
-}
-
-// GetSalesBotPayText holds the payment instructions shown before a buyer
-// uploads a receipt — a card number and account holder, typically.
-func (s *SettingService) GetSalesBotPayText() (string, error) {
-	return s.getString("salesBotPayText")
-}
-
-func (s *SettingService) GetSalesBotSupport() (string, error) {
-	return s.getString("salesBotSupport")
-}
-
-func (s *SettingService) GetSalesBotCurrency() (string, error) {
-	return s.getString("salesBotCurrency")
-}
-
-// Telegram shop — wallet + pay-as-you-go
-
-// GetShopPricePerGB is what one gigabyte of consumed traffic costs. 0 disables
-// usage billing, which makes every config free.
-func (s *SettingService) GetShopPricePerGB() (int64, error) {
-	v, err := s.getInt("shopPricePerGB")
-	return int64(v), err
-}
-
-// GetShopPricePerDay is an optional daily fee charged for keeping a config
-// alive, on top of what its traffic costs. 0 = no rental fee.
-func (s *SettingService) GetShopPricePerDay() (int64, error) {
-	v, err := s.getInt("shopPricePerDay")
-	return int64(v), err
-}
-
-// GetShopInboundId is the inbound the shop creates its configs on.
-func (s *SettingService) GetShopInboundId() (int, error) {
-	return s.getInt("shopInboundId")
-}
-
-func (s *SettingService) GetShopMinTopUp() (int64, error) {
-	v, err := s.getInt("shopMinTopUp")
-	return int64(v), err
-}
-
-// GetShopMaxTopUp caps a single top-up. 0 = no ceiling.
-func (s *SettingService) GetShopMaxTopUp() (int64, error) {
-	v, err := s.getInt("shopMaxTopUp")
-	return int64(v), err
-}
-
-// GetShopMinBalance is how much has to be in the wallet before a user may
-// create a config, so nobody starts consuming with nothing to pay from.
-func (s *SettingService) GetShopMinBalance() (int64, error) {
-	v, err := s.getInt("shopMinBalance")
-	return int64(v), err
-}
-
-// GetShopMaxVolumeGB caps the traffic cap a user may ask for. 0 = no ceiling.
-func (s *SettingService) GetShopMaxVolumeGB() (int64, error) {
-	v, err := s.getInt("shopMaxVolumeGB")
-	return int64(v), err
-}
-
-// ShopBillingIntervalBounds are the limits on how often the billing run meters
-// every config. The floor keeps a busy panel from metering itself to death; the
-// ceiling keeps a wallet from running a day into the red before anyone notices.
-const (
-	ShopBillingIntervalDefault = 2
-	ShopBillingIntervalMin     = 1
-	ShopBillingIntervalMax     = 1440
-)
-
-// GetShopBillingInterval is how many minutes pass between billing runs. It is
-// always returned inside its bounds, so a hand-edited or missing value cannot
-// switch billing off — that would hand out free traffic.
-func (s *SettingService) GetShopBillingInterval() (int, error) {
-	v, err := s.getInt("shopBillingInterval")
-	if err != nil {
-		return ShopBillingIntervalDefault, err
-	}
-	return ClampShopBillingInterval(v), nil
-}
-
-// ClampShopBillingInterval brings any number into the supported range, treating
-// zero and negatives as "unset" rather than "never bill".
-func ClampShopBillingInterval(v int) int {
-	if v <= 0 {
-		return ShopBillingIntervalDefault
-	}
-	if v < ShopBillingIntervalMin {
-		return ShopBillingIntervalMin
-	}
-	if v > ShopBillingIntervalMax {
-		return ShopBillingIntervalMax
-	}
-	return v
-}
-
-// GetShopDeleteDeadDays is how many days a config may sit dead — out of traffic,
-// or with an empty wallet — before the shop deletes it from both the bot and the
-// panel. 0 means never.
-func (s *SettingService) GetShopDeleteDeadDays() (int, error) {
-	v, err := s.getInt("shopDeleteDeadDays")
-	if err != nil || v < 0 {
-		return 0, err
-	}
-	return v, nil
-}
-
-// GetShopJoinChannel is the channel a user must be a member of before the shop
-// serves them. Empty = no requirement.
-func (s *SettingService) GetShopJoinChannel() (string, error) {
-	return s.getString("shopJoinChannel")
-}
-
-// GetShopConfigDays is how long a new config stays valid. 0 = no expiry.
-func (s *SettingService) GetShopConfigDays() (int, error) {
-	return s.getInt("shopConfigDays")
-}
-
-// Auto-delete of expired clients
-
-func (s *SettingService) GetAutoDeleteExpiredEnable() (bool, error) {
-	return s.getBool("autoDeleteExpiredEnable")
-}
-
-func (s *SettingService) GetAutoDeleteExpiredDays() (int, error) {
-	return s.getInt("autoDeleteExpiredDays")
-}
-
 // Event bus — per-subscriber event filtering
 
 func (s *SettingService) GetTgEnabledEvents() (string, error) {
@@ -1247,6 +1329,22 @@ func (s *SettingService) SetSmtpUsername(value string) error {
 	return s.setString("smtpUsername", value)
 }
 
+func (s *SettingService) GetSmtpFrom() (string, error) {
+	return s.getString("smtpFrom")
+}
+
+func (s *SettingService) SetSmtpFrom(value string) error {
+	return s.setString("smtpFrom", value)
+}
+
+func (s *SettingService) GetSmtpFromName() (string, error) {
+	return s.getString("smtpFromName")
+}
+
+func (s *SettingService) SetSmtpFromName(value string) error {
+	return s.setString("smtpFromName", value)
+}
+
 func (s *SettingService) GetSmtpPassword() (string, error) {
 	return s.getString("smtpPassword")
 }
@@ -1287,12 +1385,126 @@ func (s *SettingService) SetSmtpMemory(value int) error {
 	return s.setInt("smtpMemory", value)
 }
 
-func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
-	if err := s.preserveRedactedSecrets(allSetting); err != nil {
+// Discord bot settings
+
+func (s *SettingService) GetDiscordBotEnable() (bool, error) {
+	return s.getBool("discordBotEnable")
+}
+
+func (s *SettingService) SetDiscordBotEnable(value bool) error {
+	return s.setBool("discordBotEnable", value)
+}
+
+func (s *SettingService) GetDiscordBotToken() (string, error) {
+	return s.getString("discordBotToken")
+}
+
+func (s *SettingService) SetDiscordBotToken(value string) error {
+	return s.setString("discordBotToken", value)
+}
+
+func (s *SettingService) GetDiscordChannelId() (string, error) {
+	return s.getString("discordChannelId")
+}
+
+func (s *SettingService) SetDiscordChannelId(value string) error {
+	return s.setString("discordChannelId", value)
+}
+
+func (s *SettingService) GetDiscordAdminIds() (string, error) {
+	return s.getString("discordAdminIds")
+}
+
+func (s *SettingService) SetDiscordAdminIds(value string) error {
+	return s.setString("discordAdminIds", value)
+}
+
+func (s *SettingService) GetDiscordEnabledEvents() (string, error) {
+	return s.getString("discordEnabledEvents")
+}
+
+func (s *SettingService) SetDiscordEnabledEvents(events string) error {
+	return s.setString("discordEnabledEvents", events)
+}
+
+func (s *SettingService) GetDiscordCpu() (int, error) {
+	return s.getInt("discordCpu")
+}
+
+func (s *SettingService) SetDiscordCpu(value int) error {
+	return s.setInt("discordCpu", value)
+}
+
+func (s *SettingService) GetDiscordMemory() (int, error) {
+	return s.getInt("discordMemory")
+}
+
+func (s *SettingService) SetDiscordMemory(value int) error {
+	return s.setInt("discordMemory", value)
+}
+
+func (s *SettingService) GetDiscordRunTime() (string, error) {
+	return s.getString("discordRunTime")
+}
+
+func (s *SettingService) SetDiscordRunTime(value string) error {
+	return s.setString("discordRunTime", value)
+}
+
+func (s *SettingService) GetDiscordBotBackup() (bool, error) {
+	return s.getBool("discordBotBackup")
+}
+
+func (s *SettingService) SetDiscordBotBackup(value bool) error {
+	return s.setBool("discordBotBackup", value)
+}
+
+func (s *SettingService) GetDiscordLang() (string, error) {
+	return s.getString("discordLang")
+}
+
+func (s *SettingService) SetDiscordLang(value string) error {
+	return s.setString("discordLang", value)
+}
+
+// GetOutboundDownThreshold returns how many consecutive failed observatory
+// probes an outbound must accumulate before an outbound.down notification is
+// emitted. 1 preserves the legacy "notify on the first failed probe" behaviour.
+func (s *SettingService) GetOutboundDownThreshold() (int, error) {
+	return s.getInt("outboundDownThreshold")
+}
+
+func (s *SettingService) SetOutboundDownThreshold(value int) error {
+	return s.setInt("outboundDownThreshold", value)
+}
+
+// SecretClears marks redacted secrets the user explicitly emptied. Without a
+// flag, a blank submitted secret means "unchanged" (the field is always served
+// blank to the browser) and the stored value is preserved.
+type SecretClears struct {
+	TgBotToken      bool
+	LdapPassword    bool
+	SmtpPassword    bool
+	DiscordBotToken bool
+}
+
+func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting, clears SecretClears) error {
+	switch allSetting.SubProfileMode {
+	case "", SubProfileModeNone, SubProfileModeBuiltin, SubProfileModeCustom:
+		allSetting.SubProfileMode = effectiveSubProfileMode(allSetting.SubProfileMode, allSetting.SubProfileUrl)
+	default:
+		return errors.New("subscription profile mode must be none, builtin, or custom")
+	}
+	if err := s.preserveRedactedSecrets(allSetting, clears); err != nil {
 		return err
 	}
-	s.restoreBlankDefaults(allSetting)
 	if err := validateSettingsURLs(allSetting); err != nil {
+		return err
+	}
+	if err := validateSubUserAgentRegexes(allSetting); err != nil {
+		return err
+	}
+	if err := validateSubJsonDnsSetting(allSetting); err != nil {
 		return err
 	}
 	if err := allSetting.CheckValid(); err != nil {
@@ -1335,15 +1547,57 @@ func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
 	})
 }
 
-func (s *SettingService) preserveRedactedSecrets(allSetting *entity.AllSetting) error {
-	if strings.TrimSpace(allSetting.TgBotToken) == "" {
+func validateSubUserAgentRegexes(allSetting *entity.AllSetting) error {
+	jsonPattern, err := validateSubUserAgentRegex("Xray JSON", allSetting.SubJsonUserAgentRegex, DefaultSubJsonUserAgentRegex)
+	if err != nil {
+		return err
+	}
+	clashPattern, err := validateSubUserAgentRegex("Clash/Mihomo", allSetting.SubClashUserAgentRegex, DefaultSubClashUserAgentRegex)
+	if err != nil {
+		return err
+	}
+	allSetting.SubJsonUserAgentRegex = jsonPattern
+	allSetting.SubClashUserAgentRegex = clashPattern
+	return nil
+}
+
+func validateSubUserAgentRegex(name, pattern, defaultPattern string) (string, error) {
+	pattern = strings.TrimSpace(pattern)
+	effectivePattern := pattern
+	if effectivePattern == "" {
+		effectivePattern = defaultPattern
+	}
+	if len(effectivePattern) > maxRegexLength {
+		return "", common.NewErrorf("%s User-Agent regex must not exceed %d characters", name, maxRegexLength)
+	}
+	if _, err := regexp.Compile(effectivePattern); err != nil {
+		return "", common.NewErrorf("%s User-Agent regex is invalid: %v", name, err)
+	}
+	// Return the original pattern (empty string if cleared) so the caller
+	// can distinguish "user explicitly set empty" from "user set a value".
+	// The empty value is stored in the DB and inherited as runtime default.
+	return pattern, nil
+}
+
+func ValidateRegex(pattern string) error {
+	if len(pattern) > maxRegexLength {
+		return common.NewErrorf("Regular expression must not exceed %d characters", maxRegexLength)
+	}
+	if _, err := regexp.Compile(pattern); err != nil {
+		return common.NewError("Regular expression is invalid:", err)
+	}
+	return nil
+}
+
+func (s *SettingService) preserveRedactedSecrets(allSetting *entity.AllSetting, clears SecretClears) error {
+	if !clears.TgBotToken && strings.TrimSpace(allSetting.TgBotToken) == "" {
 		value, err := s.GetTgBotToken()
 		if err != nil {
 			return err
 		}
 		allSetting.TgBotToken = value
 	}
-	if strings.TrimSpace(allSetting.LdapPassword) == "" {
+	if !clears.LdapPassword && strings.TrimSpace(allSetting.LdapPassword) == "" {
 		value, err := s.GetLdapPassword()
 		if err != nil {
 			return err
@@ -1357,32 +1611,21 @@ func (s *SettingService) preserveRedactedSecrets(allSetting *entity.AllSetting) 
 		}
 		allSetting.TwoFactorToken = value
 	}
-	if strings.TrimSpace(allSetting.SmtpPassword) == "" {
+	if !clears.SmtpPassword && strings.TrimSpace(allSetting.SmtpPassword) == "" {
 		value, err := s.GetSmtpPassword()
 		if err != nil {
 			return err
 		}
 		allSetting.SmtpPassword = value
 	}
-	if strings.TrimSpace(allSetting.SalesBotToken) == "" {
-		value, err := s.GetSalesBotToken()
+	if !clears.DiscordBotToken && strings.TrimSpace(allSetting.DiscordBotToken) == "" {
+		value, err := s.GetDiscordBotToken()
 		if err != nil {
 			return err
 		}
-		allSetting.SalesBotToken = value
+		allSetting.DiscordBotToken = value
 	}
 	return nil
-}
-
-// restoreBlankDefaults resets settings that must never persist as empty back to
-// their built-in default. The subscription Remark Template is one such field:
-// clearing it (fully, or by deleting a word/segment so only whitespace remains)
-// and saving should restore the default template rather than store a blank value
-// — matching the field's placeholder/default the UI shows after the save reloads.
-func (s *SettingService) restoreBlankDefaults(allSetting *entity.AllSetting) {
-	if strings.TrimSpace(allSetting.RemarkTemplate) == "" {
-		allSetting.RemarkTemplate = defaultValueMap["remarkTemplate"]
-	}
 }
 
 func validateSettingsURLs(allSetting *entity.AllSetting) error {
@@ -1400,6 +1643,56 @@ func validateSettingsURLs(allSetting *entity.AllSetting) error {
 		}
 		allSetting.TgBotAPIServer = u
 	}
+	// Support/profile links land in subscription headers and page data, where
+	// client apps resolve a scheme-less value against the panel's own domain.
+	// Non-http schemes (tg://, mailto:) are legitimate here, so only default
+	// the scheme instead of forcing SanitizeHTTPURL's http(s)-only rule.
+	allSetting.SubSupportUrl = common.EnsureURLScheme(allSetting.SubSupportUrl)
+	allSetting.SubProfileUrl = common.EnsureURLScheme(allSetting.SubProfileUrl)
+	for _, ptr := range []*string{
+		&allSetting.SubHappNewUrl,
+		&allSetting.SubHappFallbackUrl,
+		&allSetting.SubHappSubInfoButtonLink,
+		&allSetting.SubHappSubExpireButtonLink,
+	} {
+		if strings.TrimSpace(*ptr) != "" {
+			*ptr = common.EnsureURLScheme(strings.TrimSpace(*ptr))
+		}
+	}
+	for name, value := range map[string]*string{
+		"Happ routing source":              &allSetting.SubRoutingRules,
+		"Clash/Mihomo routing source":      &allSetting.SubClashRules,
+		"Incy routing source":              &allSetting.SubIncyRoutingRules,
+		"JSON subscription routing source": &allSetting.SubJsonRoutingRules,
+	} {
+		if err := validateRemoteRoutingURLSetting(name, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRemoteRoutingURLSetting(name string, value *string) error {
+	canonical, remote, err := common.ParseRemoteRoutingURL(*value)
+	if err != nil {
+		return common.NewError(name, err.Error())
+	}
+	if remote {
+		*value = canonical
+	}
+	return nil
+}
+
+// The same parser the sub server uses, so a value can never be saved as valid
+// and then silently ignored at request time.
+func validateSubJsonDnsSetting(allSetting *entity.AllSetting) error {
+	value := strings.TrimSpace(allSetting.SubJsonDns)
+	if value != "" {
+		if _, err := dnsconf.Parse(value); err != nil {
+			return common.NewError("JSON subscription DNS is invalid:", err.Error())
+		}
+	}
+	allSetting.SubJsonDns = value
 	return nil
 }
 
@@ -1465,67 +1758,31 @@ func (s *SettingService) BuildSubURIBase(host string) string {
 	return fmt.Sprintf("%s://%s:%d", scheme, subDomain, subPort)
 }
 
-// PublicHost is the panel's own externally reachable name, for code that has to
-// build a URL with no incoming request to infer the host from — a Telegram bot,
-// a scheduled job. It is the same order the subscription server falls back
-// through, so a link built here matches one built from a browser request.
-// Empty when the admin has told the panel neither domain.
-func (s *SettingService) PublicHost() string {
-	if d, err := s.GetSubDomain(); err == nil {
-		if h := hostOnly(d); h != "" {
-			return h
-		}
-	}
-	if d, err := s.GetWebDomain(); err == nil {
-		return hostOnly(d)
-	}
-	return ""
-}
-
-// hostOnly reduces whatever an admin typed into a domain field to a bare
-// host[:port]. A domain field often ends up holding a pasted address bar, and a
-// link built from "https://host:2053/panel/" is a dead link.
-func hostOnly(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	raw = strings.TrimPrefix(strings.TrimPrefix(raw, "https://"), "http://")
-	raw, _, _ = strings.Cut(raw, "/")
-	return strings.TrimSpace(raw)
-}
-
-// BuildSubURI is BuildSubURIBase with the subscription path appended — the
-// complete prefix a subscription id is hung off. Callers that hand a URL to a
-// user want this one; the base alone points at the subscription server's root,
-// which serves nothing.
-func (s *SettingService) BuildSubURI(host string) string {
-	subPath, _ := s.GetSubPath()
-	return s.BuildSubURIBase(host) + subPath
-}
-
 func (s *SettingService) GetDefaultSettings(host string) (any, error) {
 	type settingFunc func() (any, error)
 	settings := map[string]settingFunc{
-		"expireDiff":      func() (any, error) { return s.GetExpireDiff() },
-		"trafficDiff":     func() (any, error) { return s.GetTrafficDiff() },
-		"pageSize":        func() (any, error) { return s.GetPageSize() },
-		"defaultCert":     func() (any, error) { return s.GetCertFile() },
-		"defaultKey":      func() (any, error) { return s.GetKeyFile() },
-		"tgBotEnable":     func() (any, error) { return s.GetTgbotEnabled() },
-		"subThemeDir":     func() (any, error) { return s.GetSubThemeDir() },
-		"subEnable":       func() (any, error) { return s.GetSubEnable() },
-		"subJsonEnable":   func() (any, error) { return s.GetSubJsonEnable() },
-		"subClashEnable":  func() (any, error) { return s.GetSubClashEnable() },
-		"subTitle":        func() (any, error) { return s.GetSubTitle() },
-		"subURI":          func() (any, error) { return s.GetSubURI() },
-		"subJsonURI":      func() (any, error) { return s.GetSubJsonURI() },
-		"subClashURI":     func() (any, error) { return s.GetSubClashURI() },
-		"datepicker":      func() (any, error) { return s.GetDatepicker() },
-		"ipLimitEnable":   func() (any, error) { return s.GetIpLimitEnable() },
-		"accessLogEnable": func() (any, error) { return s.GetAccessLogEnable() },
-		"webDomain":       func() (any, error) { return s.GetWebDomain() },
-		"subDomain":       func() (any, error) { return s.GetSubDomain() },
+		"expireDiff":       func() (any, error) { return s.GetExpireDiff() },
+		"trafficDiff":      func() (any, error) { return s.GetTrafficDiff() },
+		"pageSize":         func() (any, error) { return s.GetPageSize() },
+		"defaultCert":      func() (any, error) { return s.GetCertFile() },
+		"defaultKey":       func() (any, error) { return s.GetKeyFile() },
+		"tgBotEnable":      func() (any, error) { return s.GetTgbotEnabled() },
+		"subThemeDir":      func() (any, error) { return s.GetSubThemeDir() },
+		"happLinkEnable":   func() (any, error) { return s.GetHappLinkEnable() },
+		"subEnable":        func() (any, error) { return s.GetSubEnable() },
+		"subJsonEnable":    func() (any, error) { return s.GetSubJsonEnable() },
+		"subClashEnable":   func() (any, error) { return s.GetSubClashEnable() },
+		"subTitle":         func() (any, error) { return s.GetSubTitle() },
+		"subURI":           func() (any, error) { return s.GetSubURI() },
+		"subJsonURI":       func() (any, error) { return s.GetSubJsonURI() },
+		"subClashURI":      func() (any, error) { return s.GetSubClashURI() },
+		"datepicker":       func() (any, error) { return s.GetDatepicker() },
+		"ipLimitEnable":    func() (any, error) { return s.GetIpLimitEnable() },
+		"accessLogEnable":  func() (any, error) { return s.GetAccessLogEnable() },
+		"webDomain":        func() (any, error) { return s.GetWebDomain() },
+		"subDomain":        func() (any, error) { return s.GetSubDomain() },
+		"devChannelEnable": func() (any, error) { return s.GetDevChannelEnable() },
+		"isDevBuild":       func() (any, error) { return config.IsDevBuild(), nil },
 	}
 
 	result := make(map[string]any)
@@ -1572,4 +1829,35 @@ func (s *SettingService) GetDefaultSettings(host string) (any, error) {
 	}
 
 	return result, nil
+}
+
+var factoryDefaultSecretKeys = map[string]bool{
+	"tgBotToken":      true,
+	"twoFactorToken":  true,
+	"ldapPassword":    true,
+	"smtpPassword":    true,
+	"discordBotToken": true,
+}
+
+/*
+GetFactoryDefaults returns the shipped default value per setting, keyed by
+the AllSetting json field name. Unlike GetDefaultSettings (which reports
+current effective values), this is defaultValueMap projected through the
+AllSetting field set: only keys that exist as an AllSetting json tag are
+returned, minus the credential fields in factoryDefaultSecretKeys. Keys
+with no AllSetting field (secret, panelGuid, the node mTLS material,
+xrayTemplateConfig) are excluded structurally rather than by deny-list.
+*/
+func (s *SettingService) GetFactoryDefaults() map[string]string {
+	result := make(map[string]string)
+	for _, field := range reflect_util.GetFields(reflect.TypeFor[entity.AllSetting]()) {
+		key := field.Tag.Get("json")
+		if key == "" || factoryDefaultSecretKeys[key] {
+			continue
+		}
+		if value, ok := defaultValueMap[key]; ok {
+			result[key] = value
+		}
+	}
+	return result
 }

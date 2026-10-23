@@ -12,8 +12,12 @@ export function NotificationCard({ icon, title, extra, children }: Props) {
   return (
     <Card
       size="small"
-      bordered
-      title={<span>{icon} {title}</span>}
+      variant="outlined"
+      title={
+        <span>
+          {icon} {title}
+        </span>
+      }
       extra={extra}
       style={{ borderWidth: 1 }}
     >

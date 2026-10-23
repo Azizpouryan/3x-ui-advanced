@@ -1,16 +1,47 @@
 {
   "udp": [
-    { "type": "salamander", "settings": { "password": "swordfish" } },
-    { "type": "mkcp-legacy", "settings": { "header": "", "value": "abcdef0123456789" } },
-    { "type": "mkcp-legacy", "settings": { "header": "dns", "value": "cloudflare.com" } },
-    { "type": "mkcp-legacy", "settings": { "header": "wireguard", "value": "" } },
+    {
+      "type": "salamander",
+      "settings": {
+        "password": "swordfish"
+      }
+    },
+    {
+      "type": "mkcp-legacy",
+      "settings": {
+        "header": "",
+        "value": "abcdef0123456789"
+      }
+    },
+    {
+      "type": "mkcp-legacy",
+      "settings": {
+        "header": "dns",
+        "value": "cloudflare.com"
+      }
+    },
+    {
+      "type": "mkcp-legacy",
+      "settings": {
+        "header": "wireguard",
+        "value": ""
+      }
+    },
     {
       "type": "noise",
       "settings": {
         "reset": "60",
         "noise": [
-          { "type": "rand", "rand": "10-20", "delay": "10-16" },
-          { "type": "str", "packet": ["ping"], "delay": "5" }
+          {
+            "type": "array",
+            "rand": "10-20",
+            "delay": "10-16"
+          },
+          {
+            "type": "str",
+            "packet": "ping",
+            "delay": "5"
+          }
         ]
       }
     },
@@ -23,7 +54,10 @@
     },
     {
       "type": "xicmp",
-      "settings": { "dgram": false, "ips": [] }
+      "settings": {
+        "dgram": false,
+        "ips": []
+      }
     },
     {
       "type": "realm",

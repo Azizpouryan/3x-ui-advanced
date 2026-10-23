@@ -1,33 +1,29 @@
 import { useTranslation } from 'react-i18next';
-import { Form, Input, Switch } from 'antd';
+import { Input, Select, Switch } from 'antd';
 
+import { FormField } from '@/components/form/rhf';
 import AccountsList from './accounts-list';
-import OptionButtons from '@/components/form/OptionButtons';
 
 export default function MixedFields({ mixedUdpOn }: { mixedUdpOn: boolean }) {
   const { t } = useTranslation();
   return (
     <>
       <AccountsList />
-      <Form.Item name={['settings', 'auth']} label={t('pages.inbounds.info.auth')}>
-        <OptionButtons
+      <FormField name={['settings', 'auth']} label={t('pages.inbounds.info.auth')}>
+        <Select
           options={[
             { value: 'noauth', label: 'noauth' },
             { value: 'password', label: 'password' },
           ]}
         />
-      </Form.Item>
-      <Form.Item
-        name={['settings', 'udp']}
-        label="UDP"
-        valuePropName="checked"
-      >
+      </FormField>
+      <FormField name={['settings', 'udp']} label="UDP" valueProp="checked">
         <Switch />
-      </Form.Item>
+      </FormField>
       {mixedUdpOn && (
-        <Form.Item name={['settings', 'ip']} label="UDP IP">
+        <FormField name={['settings', 'ip']} label="UDP IP">
           <Input />
-        </Form.Item>
+        </FormField>
       )}
     </>
   );

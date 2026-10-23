@@ -44,11 +44,16 @@ export default function GroupRemoveClientsModal({
     [members],
   );
 
-  useEffect(() => {
-    if (!open) return;
-    setSelectedEmails([]);
-    setSearch('');
-  }, [open, rows]);
+  // React resets this during render rather than in an effect so the modal's
+  // first open frame already shows cleared fields.
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setSelectedEmails([]);
+      setSearch('');
+    }
+  }
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();

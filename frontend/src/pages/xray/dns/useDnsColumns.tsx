@@ -4,6 +4,8 @@ import { Button, Dropdown, Input, InputNumber, Space } from 'antd';
 import { MoreOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 
+import { onNumber } from '@/utils/onNumber';
+
 import { addrFor, domainsFor, expectedIPsFor } from './helpers';
 import type { DnsServerValue } from './DnsServerModal';
 
@@ -54,7 +56,7 @@ export function useDnsServerColumns({
                 ],
               }}
             >
-              <Button shape="circle" size="small" icon={<MoreOutlined />} />
+              <Button aria-label={t('more')} shape="circle" size="small" icon={<MoreOutlined />} />
             </Dropdown>
           </Space>
         ),
@@ -89,6 +91,7 @@ export function useFakednsColumns({
   deleteFakedns: (idx: number) => void;
   updateFakednsField: (idx: number, field: 'ipPool' | 'poolSize', value: string | number) => void;
 }): ColumnsType<FakednsTableRow> {
+  const { t } = useTranslation();
   return useMemo(
     () => [
       {
@@ -99,7 +102,14 @@ export function useFakednsColumns({
         render: (_v, _record, index) => (
           <Space size={6}>
             <span className="row-index">{index + 1}</span>
-            <Button shape="circle" size="small" danger icon={<DeleteOutlined />} onClick={() => deleteFakedns(index)} />
+            <Button
+              aria-label={t('delete')}
+              shape="circle"
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+              onClick={() => deleteFakedns(index)}
+            />
           </Space>
         ),
       },
@@ -111,6 +121,7 @@ export function useFakednsColumns({
         render: (_v, record, index) => (
           <Input
             value={record.ipPool}
+            aria-label={t('pages.xray.fakedns.ipPool')}
             size="small"
             onChange={(e) => updateFakednsField(index, 'ipPool', e.target.value)}
           />
@@ -125,13 +136,14 @@ export function useFakednsColumns({
         render: (_v, record, index) => (
           <InputNumber
             value={record.poolSize}
+            aria-label={t('pages.xray.fakedns.poolSize')}
             min={1}
             size="small"
-            onChange={(v) => updateFakednsField(index, 'poolSize', Number(v) || 0)}
+            onChange={onNumber((v) => updateFakednsField(index, 'poolSize', v))}
           />
         ),
       },
     ],
-    [deleteFakedns, updateFakednsField],
+    [t, deleteFakedns, updateFakednsField],
   );
 }

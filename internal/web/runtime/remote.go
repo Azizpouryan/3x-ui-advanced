@@ -17,10 +17,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mhsanaei/3x-ui/v3/internal/crypto/nodetoken"
 	"github.com/mhsanaei/3x-ui/v3/internal/database/model"
 	"github.com/mhsanaei/3x-ui/v3/internal/logger"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/netsafe"
 	"github.com/mhsanaei/3x-ui/v3/internal/util/wirecodec"
+	"github.com/mhsanaei/3x-ui/v3/internal/web/entity"
 	"github.com/mhsanaei/3x-ui/v3/internal/xray"
 )
 
@@ -68,11 +70,18 @@ type envelope struct {
 	Obj     json.RawMessage `json:"obj"`
 }
 
+// remoteAPIError is a node-panel envelope failure (HTTP 200, success=false),
+// distinct from transport/HTTP-status errors so callers can trust its message.
+type remoteAPIError struct{ msg string }
+
+func (e *remoteAPIError) Error() string { return "remote: " + e.msg }
+
 type Remote struct {
 	node *model.Node
 
-	mu            sync.RWMutex
-	remoteIDByTag map[string]int
+	mu             sync.RWMutex
+	remoteIDByTag  map[string]int
+	adoptedAliases map[string]string
 	// pushedFP holds the fingerprint of the last inbound wire payload successfully
 	// pushed, keyed by panel-side tag, so reconcile can skip re-sending an
 	// unchanged inbound. Guarded by mu; dropped with the Remote on node config change.
@@ -92,8 +101,10 @@ type Remote struct {
 }
 
 type RemoteInboundOption struct {
+	Id       int            `json:"id"`
 	Tag      string         `json:"tag"`
 	Remark   string         `json:"remark"`
+	Listen   string         `json:"listen"`
 	Protocol model.Protocol `json:"protocol"`
 	Port     int            `json:"port"`
 }
@@ -102,6 +113,7 @@ func NewRemote(n *model.Node, r NodeEgressResolver) *Remote {
 	return &Remote{
 		node:           n,
 		remoteIDByTag:  make(map[string]int),
+		adoptedAliases: make(map[string]string),
 		pushedFP:       make(map[string]string),
 		egressResolver: r,
 	}
@@ -218,7 +230,11 @@ func (r *Remote) do(ctx context.Context, method, path string, body any) (*envelo
 		return nil, err
 	}
 	if r.node.ApiToken != "" {
-		req.Header.Set("Authorization", "Bearer "+r.node.ApiToken)
+		token, err := nodetoken.Decrypt(r.node.Id, r.node.ApiToken)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt node token: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	req.Header.Set("Accept", "application/json")
 	if contentType != "" {
@@ -275,7 +291,7 @@ func (r *Remote) do(ctx context.Context, method, path string, body any) (*envelo
 		return nil, fmt.Errorf("decode envelope: %w", err)
 	}
 	if !env.Success {
-		return &env, fmt.Errorf("remote: %s", env.Msg)
+		return &env, &remoteAPIError{msg: env.Msg}
 	}
 	return &env, nil
 }
@@ -340,6 +356,7 @@ func (r *Remote) cacheDel(tag string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.remoteIDByTag, tag)
+	delete(r.pushedFP, tag)
 }
 
 func (r *Remote) ListRemoteTags(ctx context.Context) ([]string, error) {
@@ -387,6 +404,18 @@ func (r *Remote) refreshRemoteIDs(ctx context.Context) error {
 		next[ib.Tag] = ib.Id
 	}
 	r.mu.Lock()
+	// A rebuild sees only node-reported tags, so the adopted aliases must be
+	// re-applied or a later op on an adopted inbound re-creates it as a duplicate.
+	for centralTag, nodeTag := range r.adoptedAliases {
+		// A tag the node reports itself is authoritative; the alias only fills
+		// the gap left for a central tag the node knows under another name.
+		if _, reported := next[centralTag]; reported {
+			continue
+		}
+		if id, ok := next[nodeTag]; ok {
+			next[centralTag] = id
+		}
+	}
 	r.remoteIDByTag = next
 	r.mu.Unlock()
 	return nil
@@ -407,6 +436,7 @@ func (r *Remote) AddInbound(ctx context.Context, ib *model.Inbound) error {
 			r.cacheSet(created.Tag, created.Id)
 		}
 	}
+	r.recordPushedInbound(ib)
 	return nil
 }
 
@@ -436,7 +466,18 @@ func (r *Remote) UpdateInbound(ctx context.Context, oldIb, newIb *model.Inbound)
 		r.cacheDel(oldIb.Tag)
 	}
 	r.cacheSet(newIb.Tag, id)
+	r.recordPushedInbound(newIb)
 	return nil
+}
+
+func (r *Remote) SetInboundSubSortIndex(ctx context.Context, ib *model.Inbound, index int) error {
+	id, err := r.resolveRemoteID(ctx, ib.Tag)
+	if err != nil {
+		return err
+	}
+	payload := url.Values{"subSortIndex": []string{strconv.Itoa(index)}}
+	_, err = r.do(ctx, http.MethodPost, "panel/api/inbounds/"+strconv.Itoa(id)+"/subSortIndex", payload)
+	return err
 }
 
 // ReconcileInbound pushes ib only when its wire payload differs from the last
@@ -457,10 +498,58 @@ func (r *Remote) ReconcileInbound(ctx context.Context, ib *model.Inbound, exists
 	if err := r.UpdateInbound(ctx, ib, ib); err != nil {
 		return false, err
 	}
+	return true, nil
+}
+
+// recordPushedInbound stamps the fingerprint after a full-payload push — the
+// only operation that proves the node holds the entire wire payload.
+func (r *Remote) recordPushedInbound(ib *model.Inbound) {
+	fp := wireFingerprint(wireInbound(ib, r.node.Id))
 	r.mu.Lock()
 	r.pushedFP[ib.Tag] = fp
 	r.mu.Unlock()
-	return true, nil
+}
+
+// RecordAdoptedInbound stamps the exact payload fingerprint after the master
+// adopts a node's settings serialization.
+func (r *Remote) RecordAdoptedInbound(ib *model.Inbound) {
+	r.recordPushedInbound(ib)
+}
+
+// AdoptInboundAlias records a deployed alias without mutating either panel.
+// The runtime association is rediscovered after a master restart.
+func (r *Remote) AdoptInboundAlias(ib *model.Inbound, remote RemoteInboundOption) {
+	r.mu.Lock()
+	r.remoteIDByTag[remote.Tag] = remote.Id
+	r.remoteIDByTag[ib.Tag] = remote.Id
+	r.adoptedAliases[ib.Tag] = remote.Tag
+	r.pushedFP[ib.Tag] = wireFingerprint(wireInbound(ib, r.node.Id))
+	r.mu.Unlock()
+}
+
+func (r *Remote) AdoptedInboundAliases() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	aliases := make([]string, 0, len(r.adoptedAliases))
+	for _, alias := range r.adoptedAliases {
+		aliases = append(aliases, alias)
+	}
+	return aliases
+}
+
+// AdvancePushedInbound moves the reconcile-skip fingerprint from an inbound's
+// pre-edit payload to its post-edit payload once every per-client push for the
+// edit succeeded. It advances only when the recorded fingerprint proves the
+// node held the exact pre-edit state; otherwise the stale fingerprint stays and
+// the next reconcile re-sends the full inbound.
+func (r *Remote) AdvancePushedInbound(prevIb, ib *model.Inbound) {
+	prevFP := wireFingerprint(wireInbound(prevIb, r.node.Id))
+	nextFP := wireFingerprint(wireInbound(ib, r.node.Id))
+	r.mu.Lock()
+	if r.pushedFP[ib.Tag] == prevFP {
+		r.pushedFP[ib.Tag] = nextFP
+	}
+	r.mu.Unlock()
 }
 
 // wireFingerprint hashes a wire payload so an unchanged inbound is cheap to detect.
@@ -509,7 +598,24 @@ func (r *Remote) DeleteUser(ctx context.Context, ib *model.Inbound, email string
 	if err == nil {
 		return nil
 	}
-	if strings.Contains(strings.ToLower(err.Error()), "not found") {
+	var apiErr *remoteAPIError
+	if errors.As(err, &apiErr) && strings.Contains(strings.ToLower(apiErr.msg), "not found") {
+		return nil
+	}
+	return err
+}
+
+func (r *Remote) DeleteClient(ctx context.Context, email string) error {
+	if email == "" {
+		return nil
+	}
+	_, err := r.do(ctx, http.MethodPost,
+		"panel/api/clients/del/"+url.PathEscape(email), nil)
+	if err == nil {
+		return nil
+	}
+	var apiErr *remoteAPIError
+	if errors.As(err, &apiErr) && strings.Contains(strings.ToLower(apiErr.msg), "not found") {
 		return nil
 	}
 	return err
@@ -538,9 +644,14 @@ func (r *Remote) RestartXray(ctx context.Context) error {
 
 // UpdatePanel asks the node to run its own official self-updater (update.sh)
 // and restart onto the latest release. The node returns as soon as the job is
-// launched; the new version surfaces on the next heartbeat.
-func (r *Remote) UpdatePanel(ctx context.Context) error {
-	_, err := r.do(ctx, http.MethodPost, "panel/api/server/updatePanel", nil)
+// launched; the new version surfaces on the next heartbeat. When dev is true the
+// node is moved to the rolling dev channel instead of the latest stable release.
+func (r *Remote) UpdatePanel(ctx context.Context, dev bool) error {
+	var body any
+	if dev {
+		body = url.Values{"dev": {"true"}}
+	}
+	_, err := r.do(ctx, http.MethodPost, "panel/api/server/updatePanel", body)
 	return err
 }
 
@@ -601,38 +712,40 @@ func (r *Remote) ResetInboundTraffic(ctx context.Context, ib *model.Inbound) err
 }
 
 type TrafficSnapshot struct {
-	Inbounds     []*model.Inbound
-	OnlineEmails []string
+	Inbounds       []*model.Inbound
+	OnlineEmails   []string
+	ManagedAliases []string
 	// OnlineTree is the node's GUID-keyed online subtree (its own clients under
 	// its panelGuid plus every descendant under theirs). Preferred over the flat
 	// OnlineEmails so the master can attribute deeply nested clients to the real
 	// node across a chain (#4983). Empty when the node is an old build without
 	// the per-GUID endpoint — OnlineEmails is the fallback then.
-	OnlineTree    map[string][]string
-	LastOnlineMap map[string]int64
-	// Hosts carries the node's per-inbound host overrides, fetched only when
-	// the snapshot holds a tag with no central row yet.
-	Hosts []*model.Host
+	OnlineTree map[string][]string
+	// ActiveInboundTree is the GUID-keyed subtree of inbound tags that carried
+	// traffic within the node's online grace window. Empty when the node is an
+	// old build without the endpoint; the master then falls back to email-only
+	// online attribution for that node.
+	ActiveInboundTree map[string][]string
+	LastOnlineMap     map[string]int64
+	// HostGroups carries the node's per-inbound host overrides (TLS/SNI/
+	// fingerprint), fetched only when the snapshot holds a not-yet-adopted tag.
+	HostGroups []*entity.HostGroup
 }
 
-// FetchHosts pulls the node's host overrides so an inbound adopted from it
+// FetchHostGroups pulls the node's host overrides so a freshly adopted inbound
 // keeps its subscription TLS/SNI/fingerprint settings on the master.
-//
-// Best-effort by contract: the caller ignores the error, so an older node
-// without the endpoint simply adopts without overrides rather than failing the
-// whole traffic sync.
-func (r *Remote) FetchHosts(ctx context.Context) ([]*model.Host, error) {
+func (r *Remote) FetchHostGroups(ctx context.Context) ([]*entity.HostGroup, error) {
 	env, err := r.do(ctx, http.MethodGet, "panel/api/hosts/list", nil)
 	if err != nil {
 		return nil, err
 	}
-	var hosts []*model.Host
+	var groups []*entity.HostGroup
 	if len(env.Obj) > 0 {
-		if err := json.Unmarshal(env.Obj, &hosts); err != nil {
-			return nil, fmt.Errorf("decode hosts: %w", err)
+		if err := json.Unmarshal(env.Obj, &groups); err != nil {
+			return nil, fmt.Errorf("decode host groups: %w", err)
 		}
 	}
-	return hosts, nil
+	return groups, nil
 }
 
 func (r *Remote) FetchTrafficSnapshot(ctx context.Context) (*TrafficSnapshot, error) {
@@ -666,6 +779,13 @@ func (r *Remote) FetchTrafficSnapshot(ctx context.Context) (*TrafficSnapshot, er
 		logger.Warning("remote", r.node.Name, "lastOnline fetch failed:", err)
 	} else if len(envLastOnline.Obj) > 0 {
 		_ = json.Unmarshal(envLastOnline.Obj, &snap.LastOnlineMap)
+	}
+
+	envActiveInbounds, err := r.do(ctx, http.MethodPost, "panel/api/clients/activeInbounds", nil)
+	if err != nil {
+		logger.Debugf("remote %s active inbounds fetch failed: %v", r.node.Name, err)
+	} else if len(envActiveInbounds.Obj) > 0 {
+		_ = json.Unmarshal(envActiveInbounds.Obj, &snap.ActiveInboundTree)
 	}
 
 	return snap, nil
@@ -711,8 +831,12 @@ func wireInbound(ib *model.Inbound, remoteNodeID int) url.Values {
 	}
 	v.Set("shareAddrStrategy", shareAddrStrategy)
 	v.Set("shareAddr", ib.ShareAddr)
+	v.Set("disableFlow", strconv.FormatBool(ib.DisableFlow))
 	if ib.TrafficReset != "" {
 		v.Set("trafficReset", ib.TrafficReset)
+	}
+	if ib.TrafficResetDay > 0 {
+		v.Set("trafficResetDay", strconv.Itoa(ib.TrafficResetDay))
 	}
 	return v
 }

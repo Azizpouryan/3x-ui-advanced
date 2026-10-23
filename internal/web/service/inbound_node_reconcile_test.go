@@ -3,9 +3,11 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -85,12 +87,9 @@ func reconcileTestNode(t *testing.T, ts *httptest.Server, name, mode string, tag
 		Enable:              true,
 		AllowPrivateAddress: true,
 		Status:              "online",
-		// Adopted: these tests exercise the steady state, which is also what
-		// the NodeInboundsAdopted seeder gives every pre-existing node. The
-		// un-adopted case has its own test below.
-		InboundsAdoptedAt: 1,
-		InboundSyncMode:   mode,
-		InboundTags:       tags,
+		InboundSyncMode:     mode,
+		InboundTags:         tags,
+		InboundsAdoptedAt:   1,
 	}
 	if err := database.GetDB().Create(n).Error; err != nil {
 		t.Fatalf("create node: %v", err)
@@ -147,6 +146,214 @@ func TestReconcileNode_AllModeDeletesUndesiredRemoteInbounds(t *testing.T) {
 	}
 }
 
+// A node whose pre-existing inbounds were never adopted into the central DB
+// has zero local rows for legitimate reasons: reconcile before that first
+// adoption must not sweep — it would delete every real inbound on the node
+// right after onboarding (add node, save it again, watch it get wiped).
+func TestReconcileNode_SkipsSweepBeforeFirstAdoption(t *testing.T) {
+	setupConflictDB(t)
+
+	ts, deletedIDs := fakeNodePanel(t, map[string]int{
+		"real-a": 1,
+		"real-b": 2,
+		"real-c": 3,
+	})
+	node := reconcileTestNode(t, ts, "fresh-node", "all", nil)
+	node.InboundsAdoptedAt = 0
+
+	svc := InboundService{}
+	if err := svc.ReconcileNode(context.Background(), runtime.NewRemote(node, nil), node); err != nil {
+		t.Fatalf("ReconcileNode: %v", err)
+	}
+
+	if got := deletedIDs(); len(got) != 0 {
+		t.Fatalf("deleted remote ids = %v, want none before first adoption", got)
+	}
+}
+
+// One inbound the node rejects (e.g. a legacy protocol failing the node's
+// request validation, #5685) must not abort the reconcile: the healthy inbound
+// is still pushed, the delete sweep still runs, and the returned error names
+// the failed tag so the caller keeps the dirty flag set for retry.
+func TestReconcileNode_ContinuesPastFailedInbound(t *testing.T) {
+	setupConflictDB(t)
+
+	var mu sync.Mutex
+	updated := map[int]int{}
+	var deleted []int
+	tagToID := map[string]int{"legacy": 1, "healthy": 2, "gone": 3}
+	writeOK := func(w http.ResponseWriter, obj any) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "msg": "", "obj": obj})
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/panel/api/inbounds/list", func(w http.ResponseWriter, _ *http.Request) {
+		type row struct {
+			Id  int    `json:"id"`
+			Tag string `json:"tag"`
+		}
+		rows := make([]row, 0, len(tagToID))
+		for tag, id := range tagToID {
+			rows = append(rows, row{Id: id, Tag: tag})
+		}
+		writeOK(w, rows)
+	})
+	mux.HandleFunc("/panel/api/inbounds/update/", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/panel/api/inbounds/update/"))
+		if err != nil {
+			http.Error(w, "bad id", http.StatusBadRequest)
+			return
+		}
+		if id == tagToID["legacy"] {
+			http.Error(w, "request body failed validation", http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		updated[id]++
+		mu.Unlock()
+		writeOK(w, nil)
+	})
+	mux.HandleFunc("/panel/api/inbounds/del/", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/panel/api/inbounds/del/"))
+		if err != nil {
+			http.Error(w, "bad id", http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		deleted = append(deleted, id)
+		mu.Unlock()
+		writeOK(w, nil)
+	})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	node := reconcileTestNode(t, ts, "half-broken-node", "all", nil)
+	seedInboundConflictNode(t, "legacy", "", 1080, model.Protocol("socks"), ``, `{"auth":"noauth"}`, &node.Id)
+	seedInboundConflictNode(t, "healthy", "", 443, model.VLESS, `{"network":"tcp"}`, `{"clients":[]}`, &node.Id)
+
+	svc := InboundService{}
+	err := svc.ReconcileNode(context.Background(), runtime.NewRemote(node, nil), node)
+	if err == nil {
+		t.Fatal("ReconcileNode: want an error naming the rejected inbound, got nil")
+	}
+	if !strings.Contains(err.Error(), `reconcile inbound "legacy"`) {
+		t.Fatalf("ReconcileNode error = %q, want it to name inbound \"legacy\"", err)
+	}
+
+	mu.Lock()
+	healthyPushes := updated[tagToID["healthy"]]
+	gotDeleted := append([]int(nil), deleted...)
+	mu.Unlock()
+	if healthyPushes != 1 {
+		t.Fatalf("healthy inbound pushed %d times, want 1", healthyPushes)
+	}
+	sort.Ints(gotDeleted)
+	if len(gotDeleted) != 1 || gotDeleted[0] != tagToID["gone"] {
+		t.Fatalf("deleted remote ids = %v, want [%d] (sweep must still run past the failure)", gotDeleted, tagToID["gone"])
+	}
+}
+
+func TestReconcileNode_AdoptsCompatibleOriginInboundWithoutRemoteMutation(t *testing.T) {
+	setupConflictDB(t)
+
+	var mu sync.Mutex
+	mutations := 0
+	writeOK := func(w http.ResponseWriter, obj any) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "msg": "", "obj": obj})
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/panel/api/inbounds/list", func(w http.ResponseWriter, _ *http.Request) {
+		writeOK(w, []map[string]any{{"id": 41, "tag": "already-deployed", "listen": "", "port": 8443, "protocol": "vless"}})
+	})
+	mux.HandleFunc("/panel/api/inbounds/", func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		mutations++
+		mu.Unlock()
+		writeOK(w, nil)
+	})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	node := reconcileTestNode(t, ts, "adopt-node", "all", nil)
+	node.Guid = "origin-guid"
+	if err := database.GetDB().Model(node).Update("guid", node.Guid).Error; err != nil {
+		t.Fatalf("update node guid: %v", err)
+	}
+	seedInboundConflictNode(t, "desired-name", "", 8443, model.VLESS, `{"network":"tcp"}`, `{"clients":[]}`, &node.Id)
+	if err := database.GetDB().Model(&model.Inbound{}).Where("tag = ?", "desired-name").Update("origin_node_guid", node.Guid).Error; err != nil {
+		t.Fatalf("set origin guid: %v", err)
+	}
+
+	svc := InboundService{}
+	rt := runtime.NewRemote(node, nil)
+	if err := svc.ReconcileNode(context.Background(), rt, node); err != nil {
+		t.Fatalf("first ReconcileNode: %v", err)
+	}
+	if err := svc.ReconcileNode(context.Background(), rt, node); err != nil {
+		t.Fatalf("second ReconcileNode: %v", err)
+	}
+	mu.Lock()
+	got := mutations
+	mu.Unlock()
+	if got != 0 {
+		t.Fatalf("remote mutations = %d, want 0 while adopting compatible deployed inbound", got)
+	}
+}
+
+func TestReconcileNode_AmbiguousCompatibleInboundsAreNotSwept(t *testing.T) {
+	setupConflictDB(t)
+
+	ts, deletedIDs := fakeNodePanel(t, map[string]int{"alias-a": 51, "alias-b": 52})
+	node := reconcileTestNode(t, ts, "ambiguous-node", "all", nil)
+	node.Guid = "origin-guid"
+	if err := database.GetDB().Model(node).Update("guid", node.Guid).Error; err != nil {
+		t.Fatalf("update node guid: %v", err)
+	}
+	seedInboundConflictNode(t, "desired-name", "", 0, model.Protocol(""), `{}`, `{"clients":[]}`, &node.Id)
+	if err := database.GetDB().Model(&model.Inbound{}).Where("tag = ?", "desired-name").Update("origin_node_guid", node.Guid).Error; err != nil {
+		t.Fatalf("set origin guid: %v", err)
+	}
+
+	err := (&InboundService{}).ReconcileNode(context.Background(), runtime.NewRemote(node, nil), node)
+	if err == nil || !strings.Contains(err.Error(), "ambiguous compatible remote inbounds") {
+		t.Fatalf("ReconcileNode error = %v, want ambiguity error", err)
+	}
+	if got := deletedIDs(); len(got) != 0 {
+		t.Fatalf("deleted ambiguous candidates = %v, want none", got)
+	}
+}
+
+func TestReconcileNode_IncompatiblePortOccupantRemainsLoud(t *testing.T) {
+	setupConflictDB(t)
+
+	writeOK := func(w http.ResponseWriter, obj any) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "msg": "", "obj": obj})
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/panel/api/inbounds/list", func(w http.ResponseWriter, _ *http.Request) {
+		writeOK(w, []map[string]any{{"id": 42, "tag": "port-owner", "listen": "", "port": 9443, "protocol": "trojan"}})
+	})
+	mux.HandleFunc("/panel/api/inbounds/add", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": false, "msg": "port already occupied", "obj": nil})
+	})
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+
+	node := reconcileTestNode(t, ts, "drift-node", "all", nil)
+	node.Guid = "origin-guid"
+	seedInboundConflictNode(t, "desired-name", "", 9443, model.VLESS, `{"network":"tcp"}`, `{"clients":[]}`, &node.Id)
+	if err := database.GetDB().Model(&model.Inbound{}).Where("tag = ?", "desired-name").Update("origin_node_guid", node.Guid).Error; err != nil {
+		t.Fatalf("set origin guid: %v", err)
+	}
+
+	err := (&InboundService{}).ReconcileNode(context.Background(), runtime.NewRemote(node, nil), node)
+	if err == nil || !strings.Contains(err.Error(), "port already occupied") {
+		t.Fatalf("ReconcileNode error = %v, want loud incompatible-port error", err)
+	}
+}
+
 func TestEnsureInboundTagAllowed(t *testing.T) {
 	setupConflictDB(t)
 	db := database.GetDB()
@@ -200,49 +407,20 @@ func TestEnsureInboundTagAllowed(t *testing.T) {
 	}
 }
 
-// TestReconcileNode_NeverSweepsBeforeFirstAdoption is the regression for a node
-// losing its real inbounds at onboarding.
-//
-// Adding a node imports nothing; its pre-existing inbounds only become central
-// rows on the first clean traffic-sync tick. But any save of the node —
-// switching sync mode, or picking tags after "Load inbounds from node" — marks
-// it config-dirty, and the next tick ran reconcile before that first adoption.
-// With zero central rows the sweep saw every remote tag as undesired and
-// deleted the node's real inbounds, in "all" mode all of them, disconnecting
-// live clients with no confirmation.
-func TestReconcileNode_NeverSweepsBeforeFirstAdoption(t *testing.T) {
+// A panel-created node inbound is stored as "n<id>-tag" and pushed to the node
+// with the prefix stripped, so the sweep's selected set must match both forms.
+func TestReconcileNode_SelectedModeSweepsPrefixedSelectedTag(t *testing.T) {
 	setupConflictDB(t)
 
 	ts, deletedIDs := fakeNodePanel(t, map[string]int{
-		"real-one": 1,
-		"real-two": 2,
+		"keep":          1,
+		"selected-gone": 2,
+		"unmanaged":     3,
 	})
-	node := reconcileTestNode(t, ts, "fresh-node", "all", nil)
-	// What a node looks like between "added" and its first clean sync.
-	node.InboundsAdoptedAt = 0
-
-	svc := InboundService{}
-	if err := svc.ReconcileNode(context.Background(), runtime.NewRemote(node, nil), node); err != nil {
-		t.Fatalf("ReconcileNode: %v", err)
-	}
-
-	if got := deletedIDs(); len(got) != 0 {
-		t.Fatalf("deleted remote ids = %v on a node whose inbounds were never imported; those are live inbounds", got)
-	}
-}
-
-// TestReconcileNode_SweepsOnceAdopted: the guard must not switch anti-entropy
-// off for good — a node that has synced before still sweeps tags the panel
-// really deleted, including while the node was unreachable.
-func TestReconcileNode_SweepsOnceAdopted(t *testing.T) {
-	setupConflictDB(t)
-
-	ts, deletedIDs := fakeNodePanel(t, map[string]int{
-		"keep": 1,
-		"gone": 2,
-	})
-	node := reconcileTestNode(t, ts, "adopted-node", "all", nil)
-	seedInboundConflictNode(t, "keep", "", 443, model.VLESS, `{"network":"tcp"}`, `{"clients":[]}`, &node.Id)
+	node := reconcileTestNode(t, ts, "sel-prefix-node", "selected", nil)
+	prefix := fmt.Sprintf("n%d-", node.Id)
+	node.InboundTags = []string{prefix + "keep", prefix + "selected-gone"}
+	seedInboundConflictNode(t, prefix+"keep", "", 443, model.VLESS, `{"network":"tcp"}`, `{"clients":[]}`, &node.Id)
 
 	svc := InboundService{}
 	if err := svc.ReconcileNode(context.Background(), runtime.NewRemote(node, nil), node); err != nil {
@@ -251,6 +429,74 @@ func TestReconcileNode_SweepsOnceAdopted(t *testing.T) {
 
 	got := deletedIDs()
 	if len(got) != 1 || got[0] != 2 {
-		t.Fatalf("deleted remote ids = %v, want [2]", got)
+		t.Fatalf("deleted remote ids = %v, want [2] (prefixed selected tag must be swept, unmanaged 3 must survive)", got)
+	}
+}
+
+// Saving the node form marks the node dirty in the same transaction that grows
+// its managed set, so reconcile would sweep a tag the panel has not imported yet.
+func TestReconcileNode_SaveGrowingSelectionRearmsSweepGuard(t *testing.T) {
+	cases := []struct {
+		name        string
+		storedTags  []string
+		mode        string
+		tags        []string
+		wantDeleted []int
+	}{
+		{
+			name:        "newly selected tag is imported, not swept",
+			storedTags:  []string{"keep"},
+			mode:        "selected",
+			tags:        []string{"keep", "fresh"},
+			wantDeleted: nil,
+		},
+		{
+			name:        "switch to all mode imports before sweeping",
+			storedTags:  []string{"keep"},
+			mode:        "all",
+			wantDeleted: nil,
+		},
+		{
+			name:        "unchanged selection still sweeps a deleted tag",
+			storedTags:  []string{"keep", "gone"},
+			mode:        "selected",
+			tags:        []string{"keep", "gone"},
+			wantDeleted: []int{3},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setupConflictDB(t)
+			ts, deletedIDs := fakeNodePanel(t, map[string]int{"keep": 1, "fresh": 2, "gone": 3})
+			node := reconcileTestNode(t, ts, "grow-node", "selected", tc.storedTags)
+			seedInboundConflictNode(t, "keep", "", 443, model.VLESS, `{"network":"tcp"}`, `{"clients":[]}`, &node.Id)
+
+			err := (&NodeService{}).UpdateFromRequest(node.Id, &NodeMutationRequest{
+				Name:                node.Name,
+				Scheme:              node.Scheme,
+				Address:             node.Address,
+				Port:                node.Port,
+				BasePath:            node.BasePath,
+				Enable:              true,
+				AllowPrivateAddress: true,
+				InboundSyncMode:     tc.mode,
+				InboundTags:         tc.tags,
+			})
+			if err != nil {
+				t.Fatalf("UpdateFromRequest: %v", err)
+			}
+			saved := &model.Node{}
+			if err := database.GetDB().First(saved, node.Id).Error; err != nil {
+				t.Fatalf("reload node: %v", err)
+			}
+
+			svc := InboundService{}
+			if err := svc.ReconcileNode(context.Background(), runtime.NewRemote(saved, nil), saved); err != nil {
+				t.Fatalf("ReconcileNode: %v", err)
+			}
+			if got := deletedIDs(); !slices.Equal(got, tc.wantDeleted) {
+				t.Fatalf("deleted remote ids = %v, want %v", got, tc.wantDeleted)
+			}
+		})
 	}
 }

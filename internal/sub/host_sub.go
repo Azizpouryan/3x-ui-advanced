@@ -43,15 +43,46 @@ func (s *SubService) hostEndpoints(inbound *model.Inbound, format string) []map[
 // raw/json/clash renderers already consume. Address/port fall back to the
 // inbound's own when the host leaves them blank (override-only host).
 func hostToExternalProxyMap(h *model.Host, defaultDest string, defaultPort int) map[string]any {
-	// Shared with the panel-side mirror written into the inbound's
-	// streamSettings (model.Host.ToExternalProxyEntry), so subscription links
-	// and the links the panel shows can't drift apart. Host-only extras are
-	// layered on below.
-	ep := h.ToExternalProxyEntry(defaultDest, defaultPort)
-	// Marks this as a host (not a legacy externalProxy) entry so host-only
-	// behaviors (e.g. reality SNI/fp override) apply without touching the
-	// legacy externalProxy path. Not emitted into output.
-	ep["isHost"] = true
+	dest := h.Address
+	if dest == "" {
+		dest = defaultDest
+	}
+	port := h.Port
+	if port == 0 {
+		port = defaultPort
+	}
+	ep := map[string]any{
+		"forceTls": hostSecurityToForceTls(h.Security),
+		"dest":     dest,
+		"port":     float64(port),
+		"remark":   h.Remark,
+		// Marks this as a host (not a legacy externalProxy) entry so host-only
+		// behaviors (e.g. reality SNI/fp override) apply without touching the
+		// legacy externalProxy path. Not emitted into output.
+		"isHost": true,
+	}
+	sni := h.Sni
+	if h.OverrideSniFromAddress {
+		sni = dest
+	}
+	if !h.KeepSniBlank && sni != "" {
+		ep["sni"] = sni
+	}
+	if h.Fingerprint != "" {
+		ep["fingerprint"] = h.Fingerprint
+	}
+	if len(h.Alpn) > 0 {
+		ep["alpn"] = stringsToAnySlice(h.Alpn)
+	}
+	if len(h.PinnedPeerCertSha256) > 0 {
+		ep["pinnedPeerCertSha256"] = stringsToAnySlice(h.PinnedPeerCertSha256)
+	}
+	if h.EchConfigList != "" {
+		ep["echConfigList"] = h.EchConfigList
+	}
+	if h.VerifyPeerCertByName != "" {
+		ep["verifyPeerCertByName"] = h.VerifyPeerCertByName
+	}
 	if h.AllowInsecure {
 		ep["allowInsecure"] = true
 	}
@@ -73,6 +104,12 @@ func hostToExternalProxyMap(h *model.Host, defaultDest string, defaultPort int) 
 	if h.FinalMask != "" {
 		ep["finalMask"] = h.FinalMask
 	}
+	if h.VlessRoute != "" {
+		ep["vlessRoute"] = h.VlessRoute
+	}
+	if h.ServerDescription != "" {
+		ep["serverDescription"] = h.ServerDescription
+	}
 	return ep
 }
 
@@ -91,17 +128,6 @@ func hostMuxOverride(ep map[string]any) string {
 // the base stream strips sockopt) and finalMask. No-op for legacy externalProxy
 // entries (which never carry these keys), so existing output is unchanged.
 func applyHostStreamOverrides(ep map[string]any, stream map[string]any) {
-	if sp, ok := ep["sockoptParams"].(string); ok && sp != "" {
-		var sockopt map[string]any
-		if json.Unmarshal([]byte(sp), &sockopt) == nil && len(sockopt) > 0 {
-			stream["sockopt"] = sockopt
-		}
-	}
-	// Host header and path: the raw-link path applies these through the share
-	// params, but the Clash and JSON renderers read the transport settings
-	// object instead — so without this a Host record's override vanished from
-	// those two formats and the client connected with the inbound's original
-	// host/path, which the CDN in front of it does not accept.
 	if hh, ok := ep["hostHeader"].(string); ok && hh != "" {
 		for _, key := range []string{"wsSettings", "httpupgradeSettings", "xhttpSettings"} {
 			if ts, ok := stream[key].(map[string]any); ok && ts != nil {
@@ -114,6 +140,12 @@ func applyHostStreamOverrides(ep map[string]any, stream map[string]any) {
 			if ts, ok := stream[key].(map[string]any); ok && ts != nil {
 				ts["path"] = p
 			}
+		}
+	}
+	if sp, ok := ep["sockoptParams"].(string); ok && sp != "" {
+		var sockopt map[string]any
+		if json.Unmarshal([]byte(sp), &sockopt) == nil && len(sockopt) > 0 {
+			stream["sockopt"] = sockopt
 		}
 	}
 	// Host finalmask: merge the host's masks into the stream's finalmask (the
@@ -139,6 +171,28 @@ func applyHostStreamOverrides(ep map[string]any, stream map[string]any) {
 			}
 		}
 	}
+}
+
+// hostSecurityToForceTls maps Host.Security onto the externalProxy forceTls
+// vocabulary. "reality"/"same"/"" all keep the inbound's base security ("same")
+// — reality parameters can only come from the inbound itself.
+func hostSecurityToForceTls(security string) string {
+	switch security {
+	case "tls", "none":
+		return security
+	default:
+		return "same"
+	}
+}
+
+func stringsToAnySlice(in []string) []any {
+	out := make([]any, 0, len(in))
+	for _, s := range in {
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // injectExternalProxy rewrites the inbound's StreamSettings so its externalProxy
@@ -266,6 +320,44 @@ func applyEndpointAllowInsecure(e ShareEndpoint, params map[string]string, secur
 	if ai, ok := e.ep["allowInsecure"].(bool); ok && ai {
 		params["allowInsecure"] = "1"
 	}
+}
+
+// applyEndpointFinalMask merges a host's Final Mask into the raw link's fm
+// param, mirroring the applyHostStreamOverrides merge on the JSON/Clash path.
+func applyEndpointFinalMask(e ShareEndpoint, params map[string]string) {
+	if merged, ok := endpointFinalMask(e, params["fm"]); ok {
+		params["fm"] = merged
+	}
+}
+
+// applyEndpointFinalMaskObj is applyEndpointFinalMask for the VMess object form.
+func applyEndpointFinalMaskObj(e ShareEndpoint, obj map[string]any) {
+	baseFm, _ := obj["fm"].(string)
+	if merged, ok := endpointFinalMask(e, baseFm); ok {
+		obj["fm"] = merged
+	}
+}
+
+func endpointFinalMask(e ShareEndpoint, baseFm string) (string, bool) {
+	if e.ep == nil {
+		return "", false
+	}
+	fm, ok := e.ep["finalMask"].(string)
+	if !ok || fm == "" {
+		return "", false
+	}
+	var masks map[string]any
+	if json.Unmarshal([]byte(fm), &masks) != nil || len(masks) == 0 {
+		return "", false
+	}
+	var base any
+	if baseFm != "" {
+		var baseMap map[string]any
+		if json.Unmarshal([]byte(baseFm), &baseMap) == nil {
+			base = baseMap
+		}
+	}
+	return marshalFinalMask(mergeFinalMask(base, masks))
 }
 
 // applyEndpointHostPathObj is applyEndpointHostPath for the VMess object form.

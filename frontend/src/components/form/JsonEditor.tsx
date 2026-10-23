@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { EditorView, basicSetup } from 'codemirror';
 import { EditorState, Compartment } from '@codemirror/state';
 import { json, jsonParseLinter } from '@codemirror/lang-json';
@@ -93,6 +94,7 @@ const JsonEditor = forwardRef<JsonEditorHandle, JsonEditorProps>(function JsonEd
   const onChangeRef = useRef(onChange);
   const valueRef = useRef(value);
   const { isDark, isUltra } = useTheme();
+  const { t } = useTranslation();
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -119,6 +121,7 @@ const JsonEditor = forwardRef<JsonEditorHandle, JsonEditorProps>(function JsonEd
         doc: value,
         extensions: [
           basicSetup,
+          EditorView.contentAttributes.of({ 'aria-label': t('jsonEditor') }),
           keymap.of([indentWithTab]),
           json(),
           linter(jsonParseLinter()),
@@ -174,7 +177,7 @@ const JsonEditor = forwardRef<JsonEditorHandle, JsonEditorProps>(function JsonEd
     });
   }, [readOnly]);
 
-  return <div ref={hostRef} className="json-editor-host" />;
+  return <div ref={hostRef} className="json-editor-host" aria-label={t('jsonEditor')} />;
 });
 
 export default JsonEditor;

@@ -69,6 +69,7 @@ export default function RuleCardList({
             <div className="rule-card-head">
               <HolderOutlined
                 className="drag-handle"
+                aria-hidden="true"
                 onPointerDown={(ev) => onHandlePointerDown(index, ev)}
               />
               <span className="rule-number">#{index + 1}</span>
@@ -76,14 +77,54 @@ export default function RuleCardList({
                 trigger={['click']}
                 menu={{
                   items: [
-                    { key: 'edit', label: <><EditOutlined /> {t('edit')}</>, onClick: () => openEdit(index) },
-                    { key: 'up', label: <ArrowUpOutlined />, disabled: index === 0, onClick: () => moveUp(index) },
-                    { key: 'down', label: <ArrowDownOutlined />, disabled: index === rows.length - 1, onClick: () => moveDown(index) },
-                    { key: 'del', danger: true, label: <><DeleteOutlined /> {t('delete')}</>, onClick: () => confirmDelete(index) },
+                    {
+                      key: 'edit',
+                      label: (
+                        <>
+                          <EditOutlined /> {t('edit')}
+                        </>
+                      ),
+                      onClick: () => openEdit(index),
+                    },
+                    {
+                      key: 'up',
+                      label: (
+                        <>
+                          <ArrowUpOutlined /> {t('pages.inbounds.form.moveUp')}
+                        </>
+                      ),
+                      disabled: index === 0,
+                      onClick: () => moveUp(index),
+                    },
+                    {
+                      key: 'down',
+                      label: (
+                        <>
+                          <ArrowDownOutlined /> {t('pages.inbounds.form.moveDown')}
+                        </>
+                      ),
+                      disabled: index === rows.length - 1,
+                      onClick: () => moveDown(index),
+                    },
+                    {
+                      key: 'del',
+                      danger: true,
+                      label: (
+                        <>
+                          <DeleteOutlined /> {t('delete')}
+                        </>
+                      ),
+                      onClick: () => confirmDelete(index),
+                    },
                   ],
                 }}
               >
-                <Button shape="circle" size="small" icon={<MoreOutlined />} />
+                <Button
+                  shape="circle"
+                  size="small"
+                  icon={<MoreOutlined />}
+                  aria-label={t('more')}
+                />
               </Dropdown>
               <Switch
                 size="small"
@@ -116,11 +157,11 @@ export default function RuleCardList({
                 </span>
                 {rule.outboundTag ? (
                   <Tag color="green" className="flow-tag">
-                    <ExportOutlined /> {rule.outboundTag}
+                    <ExportOutlined aria-hidden="true" /> {rule.outboundTag}
                   </Tag>
                 ) : rule.balancerTag ? (
                   <Tag color="purple" className="flow-tag">
-                    <ClusterOutlined /> {rule.balancerTag}
+                    <ClusterOutlined aria-hidden="true" /> {rule.balancerTag}
                   </Tag>
                 ) : (
                   <span className="criterion-empty">—</span>

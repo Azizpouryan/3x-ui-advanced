@@ -1,126 +1,179 @@
 [English](/README.md) | [فارسی](/README.fa_IR.md) | [العربية](/README.ar_EG.md) | [中文](/README.zh_CN.md) | [Español](/README.es_ES.md) | [Русский](/README.ru_RU.md) | [Türkçe](/README.tr_TR.md)
 
-# 3X-UI — RBAC 分支 (admin6501)
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./media/3x-ui-dark.png">
+    <img alt="3x-ui" src="./media/3x-ui-light.png">
+  </picture>
+</p>
 
-[MHSanaei/3X-UI](https://github.com/MHSanaei/3x-ui) 的定制分支——一个用于管理 [Xray-core](https://github.com/XTLS/Xray-core) 服务器的先进开源 Web 面板——扩展了内置的**多管理员 RBAC 系统**、**分销商（Reseller）范围限制**，以及面向隔离网/受限服务器的**完全离线安装程序**。
+<p align="center">
+  <a href="https://github.com/MHSanaei/3x-ui/releases"><img src="https://img.shields.io/github/v/release/mhsanaei/3x-ui" alt="Release"></a>
+  <a href="https://github.com/MHSanaei/3x-ui/actions"><img src="https://img.shields.io/github/actions/workflow/status/mhsanaei/3x-ui/release.yml.svg" alt="Build"></a>
+  <a href="#"><img src="https://img.shields.io/github/go-mod/go-version/mhsanaei/3x-ui.svg" alt="GO Version"></a>
+  <a href="https://github.com/MHSanaei/3x-ui/releases/latest"><img src="https://img.shields.io/github/downloads/mhsanaei/3x-ui/total.svg" alt="Downloads"></a>
+  <a href="https://www.gnu.org/licenses/gpl-3.0.en.html"><img src="https://img.shields.io/badge/license-GPL%20V3-blue.svg?longCache=true" alt="License"></a>
+  <a href="https://pkg.go.dev/github.com/mhsanaei/3x-ui/v3"><img src="https://pkg.go.dev/badge/github.com/mhsanaei/3x-ui/v3.svg" alt="Go Reference"></a>
+  <a href="https://docs.sanaei.dev"><img src="https://img.shields.io/badge/docs-docs.sanaei.dev-22d3ee" alt="Documentation"></a>
+</p>
+
+**3X-UI** 是一个先进的开源 Web 控制面板，用于管理 [Xray-core](https://github.com/XTLS/Xray-core) 服务器。它提供简洁、多语言的界面，用于部署、配置和监控各种代理与 VPN 协议——从单台 VPS 到多节点部署。
+
+3X-UI 作为原始 X-UI 项目的增强分支（fork），增加了更广泛的协议支持、更好的稳定性、按客户端的流量统计以及许多提升使用体验的功能。
 
 > [!IMPORTANT]
-> 本项目仅供个人使用。请勿用于非法用途或生产环境。
+> 本项目仅供个人使用。请勿将其用于非法目的，也请勿在生产环境中使用。
 
-## 本分支新增内容
+## 功能特性
 
-- **基于角色的访问控制（RBAC）**——在**管理员**页面管理多个面板管理员，每人拥有以下四种角色之一：
-  - `super_admin`——对一切拥有完全访问权（首个/默认管理员）。
-  - `manager`——管理入站与客户端；**无**面板设置、Xray 模板或管理员管理权限。
-  - `reseller`（分销商）——仅限于分配给他的入站；管理自己的客户端，并以**只读**方式查看其入站（无法新增/编辑/启停/删除入站）。
-  - `readonly`——可查看一切，但不能执行任何写操作。
-- **审计日志（Audit Log）**——每个管理员操作（新增/修改/删除管理员、重置密码……）都会记录操作者、目标与时间。
-- **离线安装包**——通过自包含的 tarball（面板二进制 + Xray-core + geo 数据）在无网络的服务器上安装。见 [`offline/`](offline/)。
-- **面向分支的更新检查**——面板的"检查更新"读取本分支（`admin6501/3x-ui`）的发行版。
-- **PostgreSQL 安全迁移**——SQLite → PostgreSQL 迁移会复制全部 RBAC 数据（管理员、角色、允许的入站、审计日志）。
+- **多协议入站** — VLESS、VMess、Trojan、Shadowsocks、WireGuard、AmneziaWG、TUIC v5、Hysteria2、MTProto、HTTP、SOCKS (Mixed)、Dokodemo-door / Tunnel 和 TUN。
+- **现代传输与安全** — TCP (Raw)、mKCP、WebSocket、gRPC、HTTPUpgrade 和 XHTTP，并通过 TLS、XTLS 和 REALITY 加密。
+- **内置 AmneziaWG** — 抗 DPI 的 WireGuard 直接在面板内的用户态网络栈上运行，无需内核模块、DKMS 或额外软件包。
+- **内置 TUIC v5** — 基于 QUIC 的高性能代理，支持原生 UDP 中继流量统计、0-RTT 握手和 BBR 拥塞控制。
+- **MTProto 代理** — 按客户端配置 FakeTLS 密钥、广告标签和配额，实时生效且不会断开已有连接。
+- **回落 (Fallback)** — 通过 Xray 的 fallback 功能在单个端口上提供多种协议（例如在 443 端口上同时使用 VLESS 和 Trojan）。
+- **按客户端管理** — 流量配额、到期日期、可豁免受信任地址的 IP 限制、HWID 设备数限制、定时续期周期、实时在线状态，以及一键分享链接、二维码和订阅。
+- **流量统计** — 按入站、按客户端、按出站统计，并支持重置控制。
+- **多节点支持** — 从单一面板管理并扩展到多台服务器，并可将入站克隆到其他节点。
+- **出站与路由** — WARP、NordVPN、PIA、自定义路由规则、支持均衡器间回退的负载均衡器，以及出站代理链。内置的 geosite 与 geoip 分类可直接在规则编辑器中浏览。
+- **内置订阅服务器** — 提供 raw、JSON 和 Clash 输出，可依据客户端 User-Agent 自动选择，并支持[自定义页面模板](docs/custom-subscription-templates.md)。
+- **Telegram 和 Discord 机器人**，用于远程监控和管理。
+- **RESTful API**，支持带作用域、可设置有效期的令牌，并提供面板内置的 API 参考文档。
+- **可安装面板 (PWA)** — 将 3X-UI 固定到桌面或手机主屏幕。
+- **灵活的存储** — SQLite（默认）或 PostgreSQL。
+- **13 种界面语言**，支持深色和浅色主题。
+- **Fail2ban 集成**，用于强制执行按客户端的 IP 限制。
 
-## 分销商（reseller）流量分配
+## 截图
 
-为每个**分销商**设置总流量额度，面板会自动执行：
+<details>
+<summary>点击展开</summary>
 
-- 在 **Admins** 页面为每个分销商设置**流量配额**（GB）——`0` 表示无限制。
-- 用量按**该分销商所有已分配入站的上行 + 下行之和**计算。
-- 当分销商达到配额时，流量任务会**自动禁用其所有已分配入站**，立即切断其客户端。
-- 以此方式被禁用的入站会被记录，并在你**提高或重置**分销商配额后**自动重新启用**。
-- **允许超售**——只按真实用量计算——每个分销商可在分销商面板中查看自己的用量与配额。
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./media/01-overview-dark.png">
+  <img alt="Overview" src="./media/01-overview-light.png">
+</picture>
 
-## 核心功能（来自 3X-UI）
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./media/02-add-inbound-dark.png">
+  <img alt="Inbounds" src="./media/02-add-inbound-light.png">
+</picture>
 
-- **多协议入站**——VLESS、VMess、Trojan、Shadowsocks、WireGuard、Hysteria2、HTTP、SOCKS (Mixed)、Dokodemo-door / Tunnel 与 TUN。
-- **现代传输与安全**——TCP (Raw)、mKCP、WebSocket、gRPC、HTTPUpgrade 与 XHTTP，配合 TLS、XTLS 与 REALITY。
-- **按客户端管理**——流量配额、到期时间、IP 限制、实时在线状态、分享链接、二维码与订阅。
-- **多节点支持**、出站与路由（WARP、自定义规则、负载均衡）。
-- **内置订阅服务器**，支持[自定义页面模板](docs/custom-subscription-templates.md)。
-- **Telegram 机器人**、带面板内 Swagger 的 **RESTful API**、**SQLite 或 PostgreSQL**、**13 种界面语言**、深/浅色主题，以及 **Fail2ban** IP 限制强制执行。
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./media/03-add-client-dark.png">
+  <img alt="Add client" src="./media/03-add-client-light.png">
+</picture>
 
-## 面板功能与选项（本分支）
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./media/05-add-nodes-dark.png">
+  <img alt="Configs" src="./media/05-add-nodes-light.png">
+</picture>
 
-除上述内容外，面板还包括：
+</details>
 
-- **套餐 / 计划（Plans）** — 可复用的客户端模板：一键预填流量、到期时间和 IP 限制。
-- **客户端分组（Groups）** — 将多个入站捆绑，使单个订阅可一次提供多个配置。
-- **主机（Hosts）** — 为每个入站发布自定义订阅端点（地址、端口、备注、SNI）。
-- **可修改入站协议** — 现有入站可切换到其他协议；其客户端会被保留（邮箱、流量额度、到期时间、订阅 ID），仅重新生成凭据，并在保存前提示此前分享的链接将失效。
-- **订阅备注模板** — 使用 `{{VAR}}` 变量（`EMAIL`、`INBOUND`、`TRAFFIC_LEFT`、`DAYS_LEFT`、`HOST` 等）生成客户端链接名称；清空该字段会恢复默认模板。
-- **额外的订阅格式** — 在 base64 订阅之外提供 JSON 和 Clash 输出（可选路由规则）。
-- **两步验证（2FA / TOTP）** 用于管理员登录。
-- **LDAP / Active Directory 登录** — 通过目录服务对面板管理员进行认证。
-- **邮件（SMTP）通知** — 基于事件的提醒，支持 STARTTLS/TLS 和测试邮件按钮。
-- **外部流量 Webhook** — 将客户端流量事件推送到外部 URL。
-- **MTProto（Telegram）代理** 支持，通过内置的 `mtg` 组件。
-- **波斯历（Jalali）/ 公历** 可为所有日期切换。
-- **面板内教程页面**（仅 super_admin）— 覆盖各面板板块的多语言快速指南。
-- **设备（HWID）限制** — 通过 Happ/Hiddify 类应用发送的 `x-hwid` 请求头，限制可获取某客户端订阅的设备数量。支持面板默认值与逐客户端覆盖、可清空的设备列表，以及拒绝不发送设备标识的严格模式。
-- **删除到期客户端** — 从入站行菜单清理该入站下已结束的客户端，或让面板在到期若干天后自动清除（默认关闭；0 天表示永不删除）。
-- **订阅页品牌外观** — 在面板内构建用户在浏览器打开的页面：品牌名、副标题、标志、公告、配色、背景、显示板块、客服/Telegram/官网按钮与自定义 CSS，并带实时预览。
-- **Telegram 商店 —— 钱包与按量计费** — 机器人以预付钱包向终端用户售卖配置。用户先充值（单次充值的最小与最大金额由你设定），可要求先加入频道，然后在你指定的入站上按需创建任意流量上限的配置。**按实际消耗计费**：在面板设置每 GB 单价，若用户购买 10 GB 只用掉 1 GB，钱包只扣 1 GB 的费用。还可选按天收取配置租金以支持按时计价。计量每隔几分钟运行；钱包耗尽时该用户的配置会关闭，充值后立即恢复。每一笔资金变动都会写入流水，余额始终可解释。**Telegram 商店**页面展示钱包、充值申请、配置及其实时费用，并可手动增减余额。
-- **自定义角色** — 在**管理员**页面自建角色：起个名字，勾选它应有的权限（查看/管理入站、客户端、套餐、分组、主机、节点、面板设置、Xray 配置、管理员管理），然后像内置角色一样分配。勾选*限定于所分配的入站*即可让它像分销商一样工作，配额同样生效。仍被管理员使用的角色无法删除。
-- **分销商仪表盘** — 分销商登录后直接进入自己的仪表盘：流量与客户端名额的配额进度条、按状态分类的客户端数量（活跃、在线、即将到期、已结束）、各入站的用量明细、未来一周内到期的客户端，以及最近创建的客户端。
-- **停用管理员会一并关闭其入站** — 停用分销商账号时，分配给它的入站也会关闭，让其客户真正断开，而不只是禁止其本人登录。重新启用会精确恢复被关闭的那些，绝不触碰你手动停用的入站。
-- **强化安全** — CSRF 防护、安全响应头和可配置的会话时长。
-
-## 快速开始（在线）
+## 快速开始
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/admin6501/3x-ui/main/install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
 ```
 
-安装期间会生成随机的用户名、密码与 Web 路径。之后运行 `x-ui` 打开管理菜单（启动/停止、重置凭据、管理 SSL 等）。
-
-## 离线安装（无网络）
-
-适用于无法访问互联网——或 GitHub 下载被屏蔽——的服务器：
-
-1. 将 `offline/x-ui-linux-amd64.tar.gz` 与 `install_offline.sh` 复制到服务器（任意目录）。
-2. 运行：
+若要安装特定版本，请在命令后附加对应的标签（例如 `v3.7.0`）：
 
 ```bash
-chmod +x install_offline.sh
-sudo ./install_offline.sh                 # 自动检测当前目录中的 .tar.gz
-# 或显式传入：
-sudo ./install_offline.sh /root/x-ui-linux-amd64.tar.gz
+bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) v3.7.0
 ```
 
-安装程序对该安装包**不进行任何网络请求**（二进制 + Xray + geo 全部来自 tarball），会打印生成的凭据**以及 API 令牌**，并在升级时**保留现有的 `/etc/x-ui/x-ui.db`** 同时执行迁移（含 RBAC 表）。详见 [`offline/README.md`](offline/README.md)。
+若要安装滚动更新的 **dev** 版本（来自 `main` 的最新逐次提交预发布版本，而非稳定版本），请传入 `dev-latest`：
 
-> 预编译离线包**仅支持 amd64 / x86_64**。其他架构请从源码为该架构构建。
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) dev-latest
+```
+
+安装过程中会生成随机的用户名、密码和访问路径。安装完成后，运行 `x-ui` 打开管理菜单，您可以在其中启动/停止服务、查看或重置登录凭据、管理 SSL 证书等。
+
+每个发布资源都会在其旁边附带一个 `.sha256` 校验和。`install.sh` 和更新程序都会据此校验压缩包，不匹配时中止。
+
+完整文档（安装、配置、运维以及完整的 API 参考）请访问 **[docs.sanaei.dev](https://docs.sanaei.dev/zh)**。
+
+### 无人值守安装
+
+安装程序也可以**非交互式**运行，适用于 cloud-init。
+设置 `XUI_NONINTERACTIVE=1`（或在无 TTY 的情况下通过管道传入），它就会全程
+零提示地完成端到端安装，生成随机凭据并写入
+`/etc/x-ui/install-result.env`。请参阅 [`deploy/`](deploy/)：
+
+- [Cloud-init user-data](deploy/cloud-init/) — 在任意云平台上无人值守安装（Hetzner/AWS/DO/Vultr/GCP/Azure/Oracle）
+- [Hetzner Cloud 说明](deploy/marketplace/hetzner/) — 在 Hetzner 上基于 cloud-init 的部署
 
 ## 支持的平台
 
-**操作系统：** Ubuntu、Debian、Armbian、Fedora、CentOS、RHEL、AlmaLinux、Rocky Linux、Oracle Linux、Amazon Linux、Arch、Manjaro、openSUSE、Alpine 与 Windows。
+**操作系统：** Ubuntu、Debian、Armbian、Fedora、CentOS、RHEL、AlmaLinux、Rocky Linux、Oracle Linux、Amazon Linux、Virtuozzo、Arch、Manjaro、Parch、openSUSE (Tumbleweed / Leap)、Alpine 和 Windows。
 
-**架构：** `amd64` · `arm64` (aarch64) · `armv7` · `armv6` · `386` · `s390x`。
+**架构：** `amd64` · `386` · `arm64` (aarch64) · `armv7` · `armv6` · `armv5` · `s390x`。
 
-## 数据库
+## 数据库选项
 
-- **SQLite**（默认）——位于 `/etc/x-ui/x-ui.db` 的单个文件。无需配置，适合中小型部署。
-- **PostgreSQL**——推荐用于大量客户端或多节点部署。
+3X-UI 支持两种后端，可在安装时选择：
 
-将现有 SQLite 安装迁移到 PostgreSQL（含全部 RBAC 数据）：
+- **SQLite**（默认）— 位于 `/etc/x-ui/x-ui.db` 的单个文件。无需配置，适合中小型部署。
+- **PostgreSQL** — 推荐用于大量客户端或多节点设置。安装程序可以为您在本地安装 PostgreSQL，或接受指向现有服务器的 DSN。
+
+运行时通过环境变量选择后端（安装程序会为您写入 `/etc/default/x-ui`）：
+
+```
+XUI_DB_TYPE=postgres
+XUI_DB_DSN=postgres://xui:password@127.0.0.1:5432/xui?sslmode=disable
+```
+
+### 将现有的 SQLite 安装迁移到 PostgreSQL
 
 ```bash
 x-ui migrate-db --dsn "postgres://xui:password@127.0.0.1:5432/xui?sslmode=disable"
-# 然后在 /etc/default/x-ui 中设置 XUI_DB_TYPE 与 XUI_DB_DSN 并重启：
+# 然后在 /etc/default/x-ui 中设置 XUI_DB_TYPE 和 XUI_DB_DSN 并重启：
 systemctl restart x-ui
 ```
 
-源 SQLite 文件保持不变；确认新后端无误后再手动删除它。
+源 SQLite 文件保持不变；在确认新后端正常工作后，请手动删除它。
+
+### Docker
+
+默认的 `docker compose up -d` 仍使用 SQLite。若要使用捆绑的 PostgreSQL 服务运行，请取消注释 `docker-compose.yml` 中的两行 `XUI_DB_*` 环境变量，并使用该 profile 启动：
+
+```bash
+docker compose --profile postgres up -d
+```
+
+该镜像捆绑了 Fail2ban（默认启用），用于强制执行按客户端的 **IP 限制**。Fail2ban 使用 `iptables` 封禁违规者，这需要 `NET_ADMIN` 权限。`docker-compose.yml` 已通过 `cap_add` 授予该权限；如果您改用 `docker run` 启动容器，请自行添加这些权限，否则封禁只会被记录而永远不会生效：
+
+```bash
+docker run -d --cap-add=NET_ADMIN --cap-add=NET_RAW ... ghcr.io/mhsanaei/3x-ui
+```
 
 ## 环境变量
 
 | 变量 | 说明 | 默认值 |
 | --- | --- | --- |
 | `XUI_DB_TYPE` | 数据库后端：`sqlite` 或 `postgres` | `sqlite` |
-| `XUI_DB_DSN` | PostgreSQL 连接串（当 `XUI_DB_TYPE=postgres` 时） | — |
-| `XUI_DB_FOLDER` | SQLite 数据库文件目录 | `/etc/x-ui` |
-| `XUI_INIT_WEB_BASE_PATH` | Web 面板初始 URI 路径 | `/` |
+| `XUI_DB_DSN` | PostgreSQL 连接字符串（当 `XUI_DB_TYPE=postgres` 时） | — |
+| `XUI_DB_FOLDER` | SQLite 数据库文件所在目录 | `/etc/x-ui` |
+| `XUI_DB_MAX_OPEN_CONNS` | 最大打开连接数（PostgreSQL 连接池） | — |
+| `XUI_DB_MAX_IDLE_CONNS` | 最大空闲连接数（PostgreSQL 连接池） | — |
+| `XUI_INIT_WEB_BASE_PATH` | Web 面板的初始 URI 路径 | `/` |
 | `XUI_ENABLE_FAIL2BAN` | 启用基于 Fail2ban 的 IP 限制 | `true` |
 | `XUI_LOG_LEVEL` | 日志级别（`debug`、`info`、`warning`、`error`） | `info` |
+| `XUI_DEBUG` | 启用调试模式 | `false` |
+| `XUI_TUNNEL_HEALTH_MONITOR` | 启用隧道健康监控（探测某个 URL，在连续多次失败后重启 xray；重启会断开所有客户端） | `false` |
+| `XUI_TUNNEL_HEALTH_PROXY` | 探测请求所经过的代理；将其指向本地 xray 入站，使探测能够测试隧道（例如 `socks5://127.0.0.1:1080`）。留空表示探测仅检查主机连通性 | — |
+| `XUI_TUNNEL_HEALTH_URL` | 用于检测隧道健康状况的探测 URL | `https://www.cloudflare.com/cdn-cgi/trace` |
+| `XUI_TUNNEL_HEALTH_INTERVAL` | 两次探测之间的间隔 | `30s` |
+| `XUI_TUNNEL_HEALTH_TIMEOUT` | 单次探测的超时时间 | `10s` |
+| `XUI_TUNNEL_HEALTH_FAILURES` | 触发重启前的连续失败次数 | `3` |
+| `XUI_TUNNEL_HEALTH_COOLDOWN` | 两次连续重启之间的最小间隔 | `5m` |
+| `NODE_TOKEN_ENCRYPTION` | 节点 API 令牌的静态加密：`off`、`migration` 或 `required`（注意：无 `XUI_` 前缀） | `off` |
+| `XUI_NODE_TOKEN_KEY_FILE` | JSON 密钥环（权限 `0600`），包含活动密钥 ID 及其 base64 编码的 32 字节密钥 | `/etc/x-ui/node_token_key.json` |
+| `XUI_NODE_TOKEN_KEY` | 单个 base64 编码的 32 字节密钥，仅在无法加载密钥文件时使用 | — |
+
+完整列表请参阅[环境变量参考](https://docs.sanaei.dev/zh/docs/reference/env-vars)。
 
 ## 支持的语言
 
@@ -128,13 +181,51 @@ systemctl restart x-ui
 
 English · فارسی · العربية · 中文（简体） · 中文（繁體） · Español · Русский · Українська · Türkçe · Tiếng Việt · 日本語 · Bahasa Indonesia · Português (Brasil)
 
-## 文档
+## 贡献
 
-- [获取真实客户端 IP](docs/real-client-ip.md)（位于 Cloudflare / L4 中继之后）。
-- [自定义订阅模板](docs/custom-subscription-templates.md)。
+欢迎贡献。在提交 issue 或 pull request 之前，请阅读[贡献指南](/CONTRIBUTING.md)。
 
-## 致谢与许可
+## 特别感谢
 
-本项目是 **[MHSanaei/3X-UI](https://github.com/MHSanaei/3x-ui)** 的分支，并基于 [Xray-core](https://github.com/XTLS/Xray-core) 以及 [alireza0](https://github.com/alireza0/) 的原始 X-UI 构建。地理路由规则：[Iran v2ray rules](https://github.com/chocolate4u/Iran-v2ray-rules) 与 [Russia v2ray rules](https://github.com/runetfreedom/russia-v2ray-rules-dat)。
+- [alireza0](https://github.com/alireza0/)
 
-依据 **GPL-3.0** 许可，与上游项目相同。
+## 致谢
+
+- [Iran v2ray rules](https://github.com/chocolate4u/Iran-v2ray-rules) (许可证: **GPL-3.0**): _增强的 v2ray/xray 和 v2ray/xray-clients 路由规则，内置伊朗域名，专注于安全性和广告拦截。_
+- [Russia v2ray rules](https://github.com/runetfreedom/russia-v2ray-rules-dat) (许可证: **GPL-3.0**): _此仓库包含基于俄罗斯被阻止域名和地址数据自动更新的 V2Ray 路由规则。_
+
+## 社区工具
+
+社区围绕 3x-ui 构建的工具和集成。
+
+- [terraform-provider-3x-ui](https://github.com/batonogov/terraform-provider-threexui) (许可证: **MIT**): _使用 Terraform / OpenTofu 通过代码管理入站、客户端、面板设置和 Xray 配置。_
+- [3X-UI Manager](https://github.com/yukh975/3X-UI-Manager) (许可证: **MIT**): _3x-ui 的原生 Android 客户端 — 仪表板、入站、带二维码分享的客户端、节点以及多面板管理。可在 F-Droid 获取。_
+
+## 支持项目
+
+**如果这个项目对您有帮助，您可以给它一个**:star2:
+
+<a href="https://www.buymeacoffee.com/MHSanaei" target="_blank">
+<img src="./media/default-yellow.png" alt="Buy Me A Coffee" style="height: 70px !important;width: 277px !important;" >
+</a>
+
+</br>
+<a href="https://nowpayments.io/donation/hsanaei" target="_blank" rel="noreferrer noopener">
+   <img src="./media/donation-button-black.svg" alt="Crypto donation button by NOWPayments">
+</a>
+
+## 星标历史
+
+<a href="https://www.star-history.com/?repos=mhsanaei%2F3x-ui&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=mhsanaei/3x-ui&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=mhsanaei/3x-ui&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=mhsanaei/3x-ui&type=date&legend=top-left" />
+ </picture>
+</a>
+
+<p align="center">
+ <a href="https://www.star-history.com/mhsanaei/3x-ui">
+  <picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=rank&theme=dark" /><source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=rank" /><img alt="Star History Rank" src="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=rank" /></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=trending&theme=dark" /><source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=trending" /><img alt="GitHub Trending Repository of the Day" src="https://api.star-history.com/badge?repo=MHSanaei/3x-ui&type=trending" /></picture>
+ </a>
+</p>

@@ -75,7 +75,7 @@ func TestDepletedCond_ProbeGuard(t *testing.T) {
 		t.Fatalf("empty globals must use the local-only predicate")
 	}
 	seedClientRow(t, "local-cap", 1, 600, 600, 1000)
-	if _, count, _, err := svc.disableInvalidClients(db); err != nil {
+	if _, count, _, err := svc.disableInvalidClients(db, newTrafficMutationBatch()); err != nil {
 		t.Fatalf("disableInvalidClients: %v", err)
 	} else if count != 1 {
 		t.Fatalf("local over-quota client must be disabled, disabled %d", count)
@@ -91,6 +91,72 @@ func TestDepletedCond_ProbeGuard(t *testing.T) {
 	}
 }
 
+func TestStaleGlobalTraffic_Ignored(t *testing.T) {
+	db := initTrafficTestDB(t)
+	svc := &InboundService{}
+
+	staleAt := time.Now().Add(-globalTrafficFreshWindow - time.Hour).UnixMilli()
+	seedStaleGlobal := func(t *testing.T, guid, email string, up, down int64) {
+		t.Helper()
+		if err := svc.AcceptGlobalTraffic(guid, []*xray.ClientTraffic{{Email: email, Up: up, Down: down}}); err != nil {
+			t.Fatalf("AcceptGlobalTraffic(%s): %v", guid, err)
+		}
+		if err := db.Model(&model.ClientGlobalTraffic{}).
+			Where("master_guid = ? AND email = ?", guid, email).
+			Update("updated_at", staleAt).Error; err != nil {
+			t.Fatalf("age row: %v", err)
+		}
+	}
+
+	t.Run("stale row alone neither enforces nor selects the cross-panel predicate", func(t *testing.T) {
+		seedClientRow(t, "cap", 1, 100, 100, 1000)
+		seedStaleGlobal(t, "dead-master", "cap", 1000, 900)
+
+		if got, _ := depletedCond(db); got != depletedClientsCondLocal {
+			t.Fatalf("only stale globals must fall back to the local-only predicate")
+		}
+		if _, count, _, err := svc.disableInvalidClients(db, newTrafficMutationBatch()); err != nil {
+			t.Fatalf("disableInvalidClients: %v", err)
+		} else if count != 0 {
+			t.Fatalf("stale global usage must not disable a client, disabled %d", count)
+		}
+		if got := readTraffic(t, db, "cap"); !got.Enable {
+			t.Error("client within its local quota must stay enabled")
+		}
+	})
+
+	t.Run("stale row does not inflate the displayed total", func(t *testing.T) {
+		rows := []*xray.ClientTraffic{{Email: "cap", Up: 100, Down: 100}}
+		overlayGlobalTraffic(db, rows)
+		if rows[0].Up != 100 || rows[0].Down != 100 {
+			t.Errorf("stale global must not overlay display counters, got up=%d down=%d", rows[0].Up, rows[0].Down)
+		}
+	})
+
+	t.Run("a live master still enforces alongside the stale row", func(t *testing.T) {
+		if err := svc.AcceptGlobalTraffic("live-master", []*xray.ClientTraffic{{Email: "cap", Up: 1, Down: 1}}); err != nil {
+			t.Fatalf("AcceptGlobalTraffic: %v", err)
+		}
+		if got, _ := depletedCond(db); got != depletedClientsCond {
+			t.Fatalf("a fresh global row must select the cross-panel predicate")
+		}
+		if _, count, _, err := svc.disableInvalidClients(db, newTrafficMutationBatch()); err != nil {
+			t.Fatalf("disableInvalidClients: %v", err)
+		} else if count != 0 {
+			t.Fatalf("the live master reports usage well under quota, disabled %d", count)
+		}
+
+		if err := svc.AcceptGlobalTraffic("live-master", []*xray.ClientTraffic{{Email: "cap", Up: 600, Down: 500}}); err != nil {
+			t.Fatalf("AcceptGlobalTraffic: %v", err)
+		}
+		if _, count, _, err := svc.disableInvalidClients(db, newTrafficMutationBatch()); err != nil {
+			t.Fatalf("disableInvalidClients: %v", err)
+		} else if count != 1 {
+			t.Fatalf("fresh cross-panel depletion must disable the client, disabled %d", count)
+		}
+	})
+}
+
 func TestGlobalUsage_DisablesClient(t *testing.T) {
 	db := initTrafficTestDB(t)
 	svc := &InboundService{}
@@ -101,7 +167,7 @@ func TestGlobalUsage_DisablesClient(t *testing.T) {
 		t.Fatalf("AcceptGlobalTraffic: %v", err)
 	}
 
-	if _, count, _, err := svc.disableInvalidClients(db); err != nil {
+	if _, count, _, err := svc.disableInvalidClients(db, newTrafficMutationBatch()); err != nil {
 		t.Fatalf("disableInvalidClients: %v", err)
 	} else if count != 1 {
 		t.Fatalf("expected 1 client disabled, got %d", count)
@@ -165,101 +231,5 @@ func TestSnapshotListNotOverlaid_SlimOverlaid(t *testing.T) {
 	}
 	if slim[0].ClientStats[0].Up != 900 {
 		t.Errorf("slim list should carry the global overlay, got up=%d", slim[0].ClientStats[0].Up)
-	}
-}
-
-// TestDepartedMasterDoesNotDisableClients is the regression for a node cutting
-// off clients on numbers nobody is reporting any more.
-//
-// client_global_traffics rows are keyed by (master_guid, email) and are only
-// ever overwritten by a push from that same master. A master that is
-// decommissioned, reinstalled under a fresh GUID, or detached from the node
-// leaves its last snapshot behind permanently. The cross-panel quota check
-// matched any such row, so a node kept comparing a client's quota against
-// counters frozen weeks earlier and disabled it on every traffic poll — while
-// the same client stayed enabled on every other node.
-func TestDepartedMasterDoesNotDisableClients(t *testing.T) {
-	db := initTrafficTestDB(t)
-	svc := &InboundService{}
-
-	// Well inside quota locally: 10 GB used of 24 GB.
-	seedClientRow(t, "victim", 1, 5<<30, 5<<30, 24<<30)
-
-	// A master pushed 30 GB for this client and then went away.
-	if err := svc.AcceptGlobalTraffic("departed-master", []*xray.ClientTraffic{
-		{Email: "victim", Up: 15 << 30, Down: 15 << 30},
-	}); err != nil {
-		t.Fatalf("AcceptGlobalTraffic: %v", err)
-	}
-	stale := time.Now().Add(-45 * 24 * time.Hour).UnixMilli()
-	if err := db.Model(&model.ClientGlobalTraffic{}).
-		Where("email = ?", "victim").
-		Update("updated_at", stale).Error; err != nil {
-		t.Fatalf("age the pushed row: %v", err)
-	}
-
-	_, count, _, err := svc.disableInvalidClients(db)
-	if err != nil {
-		t.Fatalf("disableInvalidClients: %v", err)
-	}
-	if count != 0 {
-		t.Errorf("disabled %d client(s) on a departed master's frozen counters", count)
-	}
-
-	var row xray.ClientTraffic
-	if err := db.Where("email = ?", "victim").First(&row).Error; err != nil {
-		t.Fatalf("read back: %v", err)
-	}
-	if !row.Enable {
-		t.Error("a client at 10 GB of a 24 GB quota was disabled by a dead master's numbers")
-	}
-}
-
-// TestLiveMasterStillEnforces: the freshness bound must not turn cross-panel
-// quota enforcement off. A master pushing normally still cuts an over-quota
-// client whose local share alone is under the limit.
-func TestLiveMasterStillEnforces(t *testing.T) {
-	db := initTrafficTestDB(t)
-	svc := &InboundService{}
-
-	seedClientRow(t, "overuser", 1, 1<<30, 1<<30, 10<<30)
-	if err := svc.AcceptGlobalTraffic("live-master", []*xray.ClientTraffic{
-		{Email: "overuser", Up: 6 << 30, Down: 6 << 30},
-	}); err != nil {
-		t.Fatalf("AcceptGlobalTraffic: %v", err)
-	}
-
-	_, count, _, err := svc.disableInvalidClients(db)
-	if err != nil {
-		t.Fatalf("disableInvalidClients: %v", err)
-	}
-	if count != 1 {
-		t.Errorf("a live master's over-quota push must still disable the client, disabled %d", count)
-	}
-}
-
-// TestStaleOverlayIsNotShown: the same frozen row must not inflate the usage
-// the panel displays, or an operator sees traffic the client never had.
-func TestStaleOverlayIsNotShown(t *testing.T) {
-	db := initTrafficTestDB(t)
-	svc := &InboundService{}
-
-	seedClientRow(t, "shown", 1, 10, 10, 0)
-	if err := svc.AcceptGlobalTraffic("departed-master", []*xray.ClientTraffic{
-		{Email: "shown", Up: 900, Down: 900},
-	}); err != nil {
-		t.Fatalf("AcceptGlobalTraffic: %v", err)
-	}
-	stale := time.Now().Add(-45 * 24 * time.Hour).UnixMilli()
-	if err := db.Model(&model.ClientGlobalTraffic{}).
-		Where("email = ?", "shown").
-		Update("updated_at", stale).Error; err != nil {
-		t.Fatalf("age the pushed row: %v", err)
-	}
-
-	rows := []*xray.ClientTraffic{{Email: "shown", Up: 10, Down: 10}}
-	overlayGlobalTraffic(db, rows)
-	if rows[0].Up != 10 || rows[0].Down != 10 {
-		t.Errorf("a departed master's frozen counters were shown: up=%d down=%d", rows[0].Up, rows[0].Down)
 	}
 }

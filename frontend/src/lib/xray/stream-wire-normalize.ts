@@ -46,7 +46,7 @@ function hasMeaningfulHeaders(headers: unknown): boolean {
 // Upper bound of an xray-core Int32Range value: "16-32" -> 32, "4" -> 4,
 // 4 -> 4, "" / null -> 0. xmux fields are ranges, and xray-core keys its
 // mutual-exclusivity check on the `.To` (upper) side.
-function int32RangeUpper(v: unknown): number {
+export function int32RangeUpper(v: unknown): number {
   if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
   if (typeof v !== 'string') return 0;
   const trimmed = v.trim();
@@ -57,13 +57,9 @@ function int32RangeUpper(v: unknown): number {
 }
 
 // xray-core's XmuxConfig rejects a config that sets BOTH maxConnections
-// and maxConcurrency ("maxConnections cannot be specified together with
-// maxConcurrency"). The panel pre-fills maxConcurrency ("16-32") whenever
-// XMUX is enabled, so any explicit maxConnections would otherwise always
-// collide and make xray refuse the config. maxConnections defaults to 0
-// (off), so a positive value is an explicit opt-in to connection-pool
-// mode — honor it and drop the leftover default maxConcurrency, matching
-// core's "one strategy at a time" semantics.
+// and maxConcurrency. A positive maxConnections is an explicit opt-in to
+// connection-pool mode — honor it and drop the leftover maxConcurrency
+// default that load-time hydration backfills onto older saved configs.
 function resolveXmuxExclusivity(xmux: Record<string, unknown>): Record<string, unknown> {
   if (int32RangeUpper(xmux.maxConnections) > 0 && int32RangeUpper(xmux.maxConcurrency) > 0) {
     const out = { ...xmux };
@@ -109,10 +105,10 @@ export function validateRealityTarget(target: string): string | undefined {
 }
 
 /**
- * Parses a REALITY client version into its three bytes, padding a short value
- * with zeros the way xray-core does. Returns undefined for anything the core
- * would reject: a non-numeric part, more than three parts, or a part above 255
- * (each is written into a single byte of the ClientHello session id).
+ * Parses a REALITY client-version string the way xray-core's config loader
+ * does: one to three dot-separated numeric parts, each 0-255. Returns the
+ * parts padded to three entries, or undefined when the string is not a valid
+ * version.
  */
 export function parseRealityClientVer(value: string): [number, number, number] | undefined {
   const trimmed = value.trim();
@@ -146,9 +142,7 @@ export function validateRealityClientVer(value: string): string | undefined {
 
 /**
  * Validates the max client-version field: format first, then that a non-empty
- * max is not below a non-empty min. An inverted range refuses every client —
- * the handshake check requires clientVer >= min AND clientVer <= max — and it
- * fails silently, falling back to the dest site rather than erroring.
+ * max is not below a non-empty min (an inverted range rejects every client).
  * An empty or malformed min is left to the min field's own validation.
  */
 export function validateRealityMaxClientVer(max: string, min: string): string | undefined {
@@ -163,6 +157,18 @@ export function validateRealityMaxClientVer(max: string, min: string): string | 
     }
   }
   return undefined;
+}
+
+function liftLegacyXhttpSessionKeys(obj: Record<string, unknown>): void {
+  const lift = (legacy: string, renamed: string) => {
+    const v = obj[legacy];
+    if ((obj[renamed] === undefined || obj[renamed] === '') && typeof v === 'string' && v !== '') {
+      obj[renamed] = v;
+    }
+    delete obj[legacy];
+  };
+  lift('sessionPlacement', 'sessionIDPlacement');
+  lift('sessionKey', 'sessionIDKey');
 }
 
 function dropEmptyStrings(obj: Record<string, unknown>, keys: readonly string[]): void {
@@ -217,6 +223,7 @@ export function normalizeXhttpForWire(
   side: StreamWireSide,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = { ...raw };
+  liftLegacyXhttpSessionKeys(out);
   const mode = typeof out.mode === 'string' && out.mode !== '' ? out.mode : 'auto';
   const enableXmux = out.enableXmux === true;
   delete out.enableXmux;
@@ -300,7 +307,6 @@ export function normalizeSockoptForWire(
   const he = out.happyEyeballs;
   if (isRecord(he)) {
     const heOut: Record<string, unknown> = { ...he };
-    if (heOut.tryDelayMs === 0) delete heOut.tryDelayMs;
     if (heOut.prioritizeIPv6 === false) delete heOut.prioritizeIPv6;
     if (heOut.interleave === 1) delete heOut.interleave;
     if (heOut.maxConcurrentTry === 4) delete heOut.maxConcurrentTry;
