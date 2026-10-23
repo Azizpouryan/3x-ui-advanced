@@ -22,6 +22,8 @@ func TestRequiredPermissionRoutes(t *testing.T) {
 		{"admin api is privileged", http.MethodGet, "/panel/api/admin/list", model.PermAdminsManage},
 		{"custom roles api is privileged", http.MethodPost, "/panel/api/roles/add", model.PermAdminsManage},
 		{"nodes api needs nodes permission", http.MethodGet, "/panel/api/nodes/list", model.PermNodesManage},
+		{"subscription balancers use xray permission", http.MethodGet, "/panel/api/sub-balancers", model.PermXrayManage},
+		{"subscription balancer mutation uses xray permission", http.MethodPost, "/panel/api/sub-balancers", model.PermXrayManage},
 		{"reseller dashboard resolves own data", http.MethodGet, "/panel/api/reseller/overview", ""},
 		{"unmapped mutation fails closed", http.MethodPost, "/panel/api/newUnknownAction", "__unmapped_route__"},
 	}
