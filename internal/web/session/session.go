@@ -78,6 +78,14 @@ func GetLoginUser(c *gin.Context) *model.User {
 		}
 		return nil
 	}
+	if user.Disabled {
+		s.Delete(loginUserKey)
+		s.Delete(loginEpochKey)
+		if saveErr := s.Save(); saveErr != nil {
+			logger.Warning("session: failed to drop disabled user:", saveErr)
+		}
+		return nil
+	}
 	if !sessionEpochMatches(s.Get(loginEpochKey), user.LoginEpoch) {
 		s.Delete(loginUserKey)
 		s.Delete(loginEpochKey)

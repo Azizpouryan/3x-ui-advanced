@@ -52,6 +52,10 @@ func (s *UserService) CheckUser(username string, password string, twoFactorCode 
 		return nil, err
 	}
 
+	if user.Disabled {
+		return nil, errors.New("invalid credentials")
+	}
+
 	if !crypto.CheckPasswordHash(user.Password, password) {
 		ldapEnabled, _ := s.settingService.GetLdapEnable()
 		if !ldapEnabled {

@@ -465,7 +465,10 @@ func (s *AdminService) ResetAdminPassword(actor *model.User, id int, newPassword
 		return err
 	}
 	if err := db.Model(&model.User{}).Where("id = ?", id).
-		Update("password", hashed).Error; err != nil {
+		Updates(map[string]any{
+			"password": hashed,
+			"login_epoch": gorm.Expr("login_epoch + 1"),
+		}).Error; err != nil {
 		return err
 	}
 	s.logAction(actor, "reset_password", u.Id, u.Username, "")
@@ -625,7 +628,10 @@ func (s *AdminService) SetAdminEnabled(actor *model.User, id int, enabled bool, 
 		}
 	}
 	if err := db.Model(&model.User{}).Where("id = ?", id).
-		Update("disabled", !enabled).Error; err != nil {
+		Updates(map[string]any{
+			"disabled": !enabled,
+			"login_epoch": gorm.Expr("login_epoch + 1"),
+		}).Error; err != nil {
 		return err
 	}
 	u.Disabled = !enabled
