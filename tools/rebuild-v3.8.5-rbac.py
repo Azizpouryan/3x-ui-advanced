@@ -570,7 +570,7 @@ def rewrite_installer(root):
         if not p.is_file():
             continue
         old = p.read_text(encoding="utf-8")
-        new = old.replace("MHSanaei/3x-ui", REPO).replace("admin6501/3x-ui", REPO)
+        new = old.replace("MHSanaei/3x-ui", REPO).replace("mhsanaei/3x-ui", REPO).replace("admin6501/3x-ui", REPO)
         new = new.replace(
             "raw.githubusercontent.com/" + REPO + "/main/",
             "raw.githubusercontent.com/" + REPO + "/rebuild/v3.8.5-rbac/",
