@@ -262,6 +262,19 @@ def main() -> None:
             base = read_payload(base_path) if base_path else None
             target = read_payload(target_path) if target_path else None
 
+            # The GitHub Actions token used by this workflow is not allowed to
+            # push changes to workflow files. Keep existing fork workflows byte-for-byte
+            # and do not import newly-added upstream workflows in this automated commit.
+            # This keeps the code migration pushable; workflow updates can be reviewed
+            # and applied separately by a repository maintainer.
+            if relative.startswith(".github/workflows/"):
+                if current_path is not None:
+                    copy_path(current_path, relative, output_root)
+                    current_selected += 1
+                else:
+                    deleted_paths += 1
+                continue
+
             if relative in DEPENDENCY_FILES and target_path is not None:
                 copy_path(target_path, relative, output_root)
                 upstream_selected += 1
@@ -364,6 +377,7 @@ def main() -> None:
             "Upstream target: MHSanaei/3x-ui tag v3.8.5.",
             "Three-way file baseline: MHSanaei/3x-ui tag v3.6.0.",
             "Conflict policy: auto-merge non-overlapping changes; conflicting text hunks keep the current admin fork and are listed for manual review.",
+            "GitHub Actions workflow files are deliberately preserved from the current branch because this workflow's token cannot push edits to .github/workflows; review workflow changes separately.",
             "",
             "Merge statistics",
             "----------------",
