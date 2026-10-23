@@ -37,8 +37,8 @@ jobs:
       - name: Fetch official v3.8.5 and original admin source
         run: |
           set -euo pipefail
-          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
-          git fetch --no-tags https://github.com/MHSanaei/3x-ui.git \
+          git fetch --no-tags --depth=1 origin refs/heads/main:refs/remotes/origin/main
+          git fetch --no-tags --depth=1 https://github.com/MHSanaei/3x-ui.git \
             refs/tags/v3.8.5:refs/tags/port-target-v3.8.5
           git show -s --format='%H %s' refs/remotes/origin/main
           git show -s --format='%H %s' refs/tags/port-target-v3.8.5
