@@ -96,12 +96,23 @@ func scopedRouteDenied(method, path string) bool {
         "/panel/api/hosts", "/panel/api/plans", "/panel/api/shop",
     } { if strings.HasPrefix(path, prefix) { return true } }
     if strings.Contains(path, "/groups") { return true }
-    if strings.HasPrefix(path, "/panel/api/inbounds") { return !isReadRoute(method, path) }
+    if strings.HasPrefix(path, "/panel/api/inbounds") {
+        // Full share-link lists are not safe for a scoped account.
+        allowed := map[string]map[string]bool{
+            "/panel/api/inbounds/list": {"GET": true},
+            "/panel/api/inbounds/list/slim": {"GET": true},
+            "/panel/api/inbounds/options": {"GET": true},
+            "/panel/api/inbounds/get/:id": {"GET": true},
+            "/panel/api/inbounds/:id/fallbacks": {"GET": true},
+        }
+        if methods, ok := allowed[path]; !ok || !methods[method] { return true }
+    }
     if strings.HasPrefix(path, "/panel/api/clients") {
         // Scoped accounts only see filtered lists and row-level endpoints that
         // receive explicit database-backed scope checks. Everything else denies.
         allowed := map[string]map[string]bool{
-            "/panel/api/clients/list": {"GET": true},\n            "/panel/api/clients/list/paged": {"GET": true},
+            "/panel/api/clients/list": {"GET": true},
+            "/panel/api/clients/list/paged": {"GET": true},
             "/panel/api/clients/get/:email": {"GET": true},
             "/panel/api/clients/traffic/:email": {"GET": true},
             "/panel/api/clients/subLinks/:subId": {"GET": true},
@@ -471,16 +482,18 @@ def patch_client_paging(dst):
 \tfor _, batch := range chunkStrings(onlines, sqlInChunk) {
 \t\tvar page []string
 \t\tvar query *gorm.DB
+\t\tcolumn := "email"
 \t\tif q.scopeEnabled {
 \t\t\tquery = q.from().
 \t\t\t\tWhere("COALESCE(c.enable, FALSE) = TRUE AND c.email IN ?", batch).
 \t\t\t\tOrder("c.id ASC")
+\t\t\tcolumn = "c.email"
 \t\t} else {
 \t\t\tquery = q.db.Model(&model.ClientRecord{}).
 \t\t\t\tWhere("COALESCE(enable, FALSE) = TRUE AND email IN ?", batch).
 \t\t\t\tOrder("id ASC")
 \t\t}
-\t\tif err := query.Pluck("email", &page).Error; err != nil {
+\t\tif err := query.Pluck(column, &page).Error; err != nil {
 \t\t\treturn nil, 0, err
 \t\t}
 \t\tcount += len(page)
