@@ -706,7 +706,7 @@ def patch_frontend(root):
             "const AdminsPage = lazy(() => import('@/pages/admins/AdminsPage'));\n"
             "const ResellerDashboardPage = lazy(() => import('@/pages/reseller/ResellerDashboardPage'));\n", "admin frontend imports")
         routes = replace_once(routes, "const routes: RouteObject[] = [",
-            '''function IndexRoute() {
+            """function IndexRoute() {
   const role = (typeof window !== 'undefined' && window.X_UI_ROLE) || 'super_admin';
   const permissions = new Set(
     typeof window !== 'undefined' && Array.isArray(window.X_UI_PERMS) ? window.X_UI_PERMS : [],
@@ -733,7 +733,7 @@ function ResellerRoute() {
   return withSuspense(<ResellerDashboardPage />);
 }
 
-const routes: RouteObject[] = ['', "admin UI guard")
+const routes: RouteObject[] = [""", "admin UI guard")
         routes = replace_once(routes, "{ index: true, element: withSuspense(<IndexPage />) },",
             "{ index: true, element: <IndexRoute /> },", "scoped dashboard redirect")
         routes = replace_once(routes, "{ path: 'api-docs', element: withSuspense(<ApiDocsPage />) },",
